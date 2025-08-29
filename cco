@@ -100,6 +100,17 @@ detect_sandbox_backend() {
 	fi
 }
 
+# Determine Claude command to use (configurable via CLI flag or environment variable)
+get_claude_command() {
+	if [[ -n "$claude_command_flag" ]]; then
+		echo "$claude_command_flag"
+	elif [[ -n "$CLAUDE_COMMAND" ]]; then
+		echo "$CLAUDE_COMMAND"
+	else
+		echo "claude"
+	fi
+}
+
 # Check if Docker is available (only when using Docker backend)
 check_docker_dependencies() {
 	# Check for Docker
@@ -693,6 +704,12 @@ run_native_sandbox() {
 		done
 	fi
 	
+	# Get claude command to use and split into array
+	local claude_cmd_str
+	claude_cmd_str=$(get_claude_command)
+	# Split command string into array (handles multi-word commands)
+	read -ra claude_cmd_array <<< "$claude_cmd_str"
+	
 	# Add claude command
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
@@ -705,9 +722,9 @@ run_native_sandbox() {
 	else
 		# Always use --dangerously-skip-permissions since we're in a sandbox
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			cmd+=("claude" "--dangerously-skip-permissions")
+			cmd+=("${claude_cmd_array[@]}" "--dangerously-skip-permissions")
 		else
-			cmd+=("claude" "--dangerously-skip-permissions" "${claude_args[@]}")
+			cmd+=("${claude_cmd_array[@]}" "--dangerously-skip-permissions" "${claude_args[@]}")
 		fi
 	fi
 	
@@ -1017,7 +1034,11 @@ run_container() {
 			docker run "${docker_args[@]}" "$IMAGE_NAME"
 		else
 			start_sigwinch_monitor "$CONTAINER_NAME"
-			docker run "${docker_args[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions "${claude_args[@]}"
+			# Get claude command to use and split into array for Docker run too
+			local claude_cmd
+			claude_cmd=$(get_claude_command)
+			read -ra claude_cmd_array <<< "$claude_cmd"
+			docker run "${docker_args[@]}" "$IMAGE_NAME" "${claude_cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
 		fi
 	fi
 }
@@ -1165,6 +1186,7 @@ enable_background_tasks=false
 rebuild_image=false
 pull_image=false
 shell_mode=false
+claude_command_flag=""
 
 # First pass: Extract cco-specific flags and collect remaining args
 # This ensures --add-dir and other cco flags are parsed before subcommands
@@ -1198,6 +1220,22 @@ while [[ $# -gt 0 ]]; do
 	--enable-background-tasks)
 		enable_background_tasks=true
 		shift
+		;;
+	--claude-command | --claude-command=*)
+		# Handle both --claude-command "cmd" and --claude-command="cmd" notations
+		if [[ "$1" == *"="* ]]; then
+			# --claude-command="cmd" notation
+			claude_command_flag="${1#*=}"
+			shift
+		else
+			# --claude-command "cmd" notation
+			if [[ $# -lt 2 ]]; then
+				error "--claude-command requires an argument (command to use instead of 'claude')"
+				exit 1
+			fi
+			claude_command_flag="$2"
+			shift 2
+		fi
 		;;
 	--env | -e)
 		if [[ $# -lt 2 ]]; then
@@ -1356,6 +1394,10 @@ if [[ $# -gt 0 ]]; then
 		echo "                    Enable Claude Code background tasks (disabled by default)"
 		echo "                    Background tasks provide enhanced functionality like"
 		echo "                    improved code analysis and autonomous development features"
+		echo "  --claude-command CMD"
+		echo "                    Use alternative Claude command instead of 'claude'"
+		echo "                    e.g., --claude-command 'ccr code' to use 'ccr code' command"
+		echo "                    Can also be set via CLAUDE_COMMAND environment variable"
 		echo "  --help, -h        Show this help message"
 		echo ""
 		echo "Claude Code Options (passed through):"
