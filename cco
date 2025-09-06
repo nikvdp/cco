@@ -104,8 +104,8 @@ detect_sandbox_backend() {
 get_claude_command() {
 	if [[ -n "$claude_command_flag" ]]; then
 		echo "$claude_command_flag"
-	elif [[ -n "$CLAUDE_COMMAND" ]]; then
-		echo "$CLAUDE_COMMAND"
+	elif [[ -n "$CCO_CLAUDE_COMMAND" ]]; then
+		echo "$CCO_CLAUDE_COMMAND"
 	else
 		echo "claude"
 	fi
@@ -1397,7 +1397,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --claude-command CMD"
 		echo "                    Use alternative Claude command instead of 'claude'"
 		echo "                    e.g., --claude-command 'ccr code' to use 'ccr code' command"
-		echo "                    Can also be set via CLAUDE_COMMAND environment variable"
+		echo "                    Can also be set via CCO_CLAUDE_COMMAND environment variable"
 		echo "  --help, -h        Show this help message"
 		echo ""
 		echo "Claude Code Options (passed through):"
@@ -1419,6 +1419,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  - Automatically loads .env file if present"
 		echo "  - Passes through ANTHROPIC_API_KEY, proxy settings, git config, etc."
 		echo "  - Use --env to set custom variables"
+	echo "  - CCO_CLAUDE_COMMAND  Alternative Claude command to use (e.g., 'ccr code')"
+	echo "                      Overridden by --claude-command flag if both are set"
 		echo ""
 		echo "Requirements:"
 		echo "  - Sandbox backend: ONE of the following:"
