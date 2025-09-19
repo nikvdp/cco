@@ -172,6 +172,7 @@ cco --help
 ```
 
 ### Advanced options
+> ⚠️ **Beta security trade-offs**: `--docker` and `--allow-oauth-refresh` weaken isolation. Only enable them if you fully understand and accept the risks (host Docker control, host credential writes).
 ```bash
 # Force a specific sandbox backend
 cco --backend native  # Use native sandbox (sandbox-exec/bubblewrap)
@@ -203,6 +204,9 @@ cco self-update
 # Clean up containers
 cco cleanup
 ```
+
+- `--docker` (beta): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
+- `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 
 ## Command Pass-through
 
@@ -366,7 +370,7 @@ cco restore-creds backup-file.json  # Restore from specific backup
 - If you get authentication errors, your OAuth token may have expired
 - The containerized environment prevents automatic token refresh by default
 - **Solution**: Run `claude` directly (outside `cco`) to re-authenticate, then retry with `cco`
-- For automatic token refresh, try the experimental `--allow-oauth-refresh` flag (use with caution)
+- For automatic token refresh, the beta `--allow-oauth-refresh` flag will sync container credentials back to your host. Only use it if you accept the additional credential tampering risk.
 
 **Docker problems**
 - Start Docker daemon
@@ -377,7 +381,7 @@ cco restore-creds backup-file.json  # Restore from specific backup
 - Try `cco --rebuild` if needed
 
 **Experimental features not working**
-- OAuth refresh (`--allow-oauth-refresh`) is experimental and may have issues
+- OAuth refresh (`--allow-oauth-refresh`) is beta, reduces credential isolation, and may have issues
 - Fallback: authenticate directly with `claude` when tokens expire
 - Use credential backup/restore commands for safety: `cco backup-creds` / `cco restore-creds`
 
