@@ -111,6 +111,18 @@ get_claude_command() {
 	fi
 }
 
+# Determine command to run (configurable via CLI flag or environment variable)
+# This allows running arbitrary commands instead of Claude
+get_command() {
+	if [[ -n "$command_flag" ]]; then
+		echo "$command_flag"
+	elif [[ -n "$CCO_COMMAND" ]]; then
+		echo "$CCO_COMMAND"
+	else
+		get_claude_command
+	fi
+}
+
 # Check if Docker is available (only when using Docker backend)
 check_docker_dependencies() {
 	# Check for Docker
@@ -704,13 +716,13 @@ run_native_sandbox() {
 		done
 	fi
 	
-	# Get claude command to use and split into array
-	local claude_cmd_str
-	claude_cmd_str=$(get_claude_command)
+	# Get command to use and split into array
+	local cmd_str
+	cmd_str=$(get_command)
 	# Split command string into array (handles multi-word commands)
-	read -ra claude_cmd_array <<< "$claude_cmd_str"
-	
-	# Add claude command
+	read -ra cmd_array <<< "$cmd_str"
+
+	# Add command
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
 			# Interactive shell mode
@@ -720,11 +732,21 @@ run_native_sandbox() {
 			cmd+=("bash" "-c" "${claude_args[*]}")
 		fi
 	else
-		# Always use --dangerously-skip-permissions since we're in a sandbox
-		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			cmd+=("${claude_cmd_array[@]}" "--dangerously-skip-permissions")
+		# Check if we're running a custom command (CCO_COMMAND or --command)
+		if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+			# Running custom command - pass arguments as-is, no Claude-specific flags
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				cmd+=("${cmd_array[@]}")
+			else
+				cmd+=("${cmd_array[@]}" "${claude_args[@]}")
+			fi
 		else
-			cmd+=("${claude_cmd_array[@]}" "--dangerously-skip-permissions" "${claude_args[@]}")
+			# Running Claude - use --dangerously-skip-permissions since we're in a sandbox
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				cmd+=("${cmd_array[@]}" "--dangerously-skip-permissions")
+			else
+				cmd+=("${cmd_array[@]}" "--dangerously-skip-permissions" "${claude_args[@]}")
+			fi
 		fi
 	fi
 	
@@ -1034,11 +1056,19 @@ run_container() {
 			docker run "${docker_args[@]}" "$IMAGE_NAME"
 		else
 			start_sigwinch_monitor "$CONTAINER_NAME"
-			# Get claude command to use and split into array for Docker run too
-			local claude_cmd
-			claude_cmd=$(get_claude_command)
-			read -ra claude_cmd_array <<< "$claude_cmd"
-			docker run "${docker_args[@]}" "$IMAGE_NAME" "${claude_cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			# Get command to use and split into array for Docker run too
+			local cmd_str
+			cmd_str=$(get_command)
+			read -ra cmd_array <<< "$cmd_str"
+
+			# Check if we're running a custom command (CCO_COMMAND or --command)
+			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+				# Running custom command - pass arguments as-is, no Claude-specific flags
+				docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+			else
+				# Running Claude - use --dangerously-skip-permissions
+				docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			fi
 		fi
 	fi
 }
@@ -1187,6 +1217,7 @@ rebuild_image=false
 pull_image=false
 shell_mode=false
 claude_command_flag=""
+command_flag=""
 
 # First pass: Extract cco-specific flags and collect remaining args
 # This ensures --add-dir and other cco flags are parsed before subcommands
@@ -1237,6 +1268,22 @@ while [[ $# -gt 0 ]]; do
 			shift 2
 		fi
 		;;
+	--command | --command=*)
+		# Handle both --command "cmd" and --command="cmd" notations
+		if [[ "$1" == *"="* ]]; then
+			# --command="cmd" notation
+			command_flag="${1#*=}"
+			shift
+		else
+			# --command "cmd" notation
+			if [[ $# -lt 2 ]]; then
+				error "--command requires an argument (command to run instead of claude)"
+				exit 1
+			fi
+			command_flag="$2"
+			shift 2
+		fi
+		;;
 	--env | -e)
 		if [[ $# -lt 2 ]]; then
 			error "--env requires an argument (KEY=VALUE or KEY)"
@@ -1257,10 +1304,9 @@ while [[ $# -gt 0 ]]; do
 		shift 2
 		;;
 	--add-dir | --add-dir=*)
-		# Handle --add-dir for both notations
+		# Handle --add-dir for both notations - this is a cco flag, not passed to command
 		if [[ "$1" == *"="* ]]; then
 			# --add-dir=<dir> notation
-			remaining_args+=("$1")  # Keep for Claude
 			dir_path="${1#*=}"
 			if [[ ! -d "$dir_path" ]]; then
 				warn "Directory does not exist: $dir_path"
@@ -1271,7 +1317,6 @@ while [[ $# -gt 0 ]]; do
 			shift
 		else
 			# --add-dir <dir> notation
-			remaining_args+=("$1")  # Keep for Claude
 			shift
 			# Collect directories until next flag or known subcommand
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
@@ -1283,7 +1328,6 @@ while [[ $# -gt 0 ]]; do
 						;;
 					*)
 						dir_path="$1"
-						remaining_args+=("$1")  # Keep for Claude
 						if [[ ! -d "$dir_path" ]]; then
 							warn "Directory does not exist: $dir_path"
 						else
@@ -1398,6 +1442,10 @@ if [[ $# -gt 0 ]]; then
 		echo "                    Use alternative Claude command instead of 'claude'"
 		echo "                    e.g., --claude-command 'ccr code' to use 'ccr code' command"
 		echo "                    Can also be set via CCO_CLAUDE_COMMAND environment variable"
+		echo "  --command CMD     Run arbitrary command instead of Claude Code"
+		echo "                    e.g., --command 'python3' to run Python in the sandbox"
+		echo "                    Can also be set via CCO_COMMAND environment variable"
+		echo "                    Overrides --claude-command when both are specified"
 		echo "  --help, -h        Show this help message"
 		echo ""
 		echo "Claude Code Options (passed through):"
@@ -1421,6 +1469,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  - Use --env to set custom variables"
 	echo "  - CCO_CLAUDE_COMMAND  Alternative Claude command to use (e.g., 'ccr code')"
 	echo "                      Overridden by --claude-command flag if both are set"
+	echo "  - CCO_COMMAND       Arbitrary command to run instead of Claude Code"
+	echo "                      Overridden by --command flag if both are set"
 		echo ""
 		echo "Requirements:"
 		echo "  - Sandbox backend: ONE of the following:"

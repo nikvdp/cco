@@ -330,6 +330,12 @@ export ANTHROPIC_API_KEY=sk-key
 cco "review this pull request"
 ```
 
+### Using with OpenAI Codex
+```bash
+# Run OpenAI Codex in the same sandbox
+cco --add-dir ~/.codex --command="codex --dangerously-bypass-approvals-and-sandbox"
+```
+
 ## Experimental Features
 
 ⚠️ **These features are experimental and may have edge cases. Use with caution.**
