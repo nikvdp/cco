@@ -33,10 +33,10 @@ Claude Code runs directly on the host system with full user privileges:
 `cco` addresses these vulnerabilities through strict containerization:
 
 ### Enforced Sandbox
-- **Scoped filesystem access**: By default, Claude can read and write the current project directory plus Claude's config paths (`~/.claude`, detected config dir, `.claude.json`). Other host paths are not mounted.
-- **No directory escape**: Even if Claude tries to `cd /`, it only reaches the container or sandbox root.
-- **Process isolation**: Claude's processes are contained within either the container namespace or the native sandbox profile.
-- **Optional safe mode**: `cco --safe` (native sandbox only) hides the rest of `$HOME`, re-exposing only the project and explicitly whitelisted paths so dotfiles and secrets remain unreadable.
+- **Scoped filesystem access**: Claude can read/write the current project directory plus Claude-specific config paths (`~/.claude`, detected config dir, `.claude.json`). In Docker mode no other host paths exist unless you mount them. In native mode Seatbelt allows read-only access to the rest of the host by default; use `--safe` if you need those reads blocked.
+- **Directory changes are sandboxed**: `cd /` succeeds, but in Docker mode this is the container's root filesystem (not your host), and in native mode Seatbelt/bubblewrap deny writes outside the whitelisted paths.
+- **Process isolation**: Claude's processes are contained within either the container namespace or the native sandbox profile, preventing host-level process injection.
+- **Optional safe mode**: `cco --safe` (native sandbox only) further blocks reads under `$HOME`, leaving only the project and explicitly whitelisted paths visible.
 
 ### Network Access (Unrestricted)
 - **Full host network access**: Docker mode prefers host networking when available (otherwise uses `host.docker.internal`). Native mode runs directly on the host network. MCP servers and other localhost services remain reachable.
