@@ -147,6 +147,11 @@ Claude Code runs directly on the host system with full user privileges:
 - Denies read access to the rest of `$HOME` (dotfiles, secrets, caches) unless you explicitly whitelist them with `--add-dir` or additional `--write` holes.
 - Does not apply in Docker mode; use separate host accounts or container hardening if you require similar guarantees when Docker is in use.
 
+**Custom Rules**
+- Use `--allow-readonly PATH` to share specific files/directories read-only without granting write access.
+- Use `--deny-path PATH` to hide a path entirely (appears empty/blocked inside the sandbox). In Docker/bubblewrap this is implemented with empty overlays; in Seatbelt it raises access errors.
+- `--add-dir PATH[:ro|:rw]` lets you control permissions inline when mounting additional content.
+
 ## Experimental Features Security Considerations
 
 ⚠️ **The following features are optional and may introduce additional security risks:**

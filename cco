@@ -123,6 +123,131 @@ get_command() {
 	fi
 }
 
+path_in_array() {
+	local needle="$1"
+	shift
+	for element in "$@"; do
+		if [[ "$element" == "$needle" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+remove_path_from_array() {
+	local -n arr="$1"
+	local target="$2"
+	local new_arr=()
+	for element in "${arr[@]}"; do
+		if [[ "$element" != "$target" ]]; then
+			new_arr+=("$element")
+		fi
+	done
+	arr=("${new_arr[@]}")
+}
+
+# Resolve a path to an absolute form, tolerating files or directories that may not yet exist.
+resolve_path() {
+	local input="$1"
+	local expanded="$input"
+	if [[ "$expanded" == ~* ]]; then
+		expanded="${expanded/#\~/$HOME}"
+	fi
+
+	if [[ -d "$expanded" ]]; then
+		(cd "$expanded" && pwd)
+		return
+	fi
+
+	local dir=$(dirname "$expanded")
+	local base=$(basename "$expanded")
+	if [[ "$dir" == ~* ]]; then
+		dir="${dir/#\~/$HOME}"
+	fi
+	if [[ -d "$dir" ]]; then
+		(cd "$dir" && printf '%s/%s\n' "$(pwd)" "$base")
+	else
+		# Fall back to combining with current working directory.
+		if [[ "$dir" == "." ]]; then
+			printf '%s/%s\n' "$PWD" "$base"
+		else
+			printf '%s/%s\n' "$dir" "$base"
+		fi
+	fi
+}
+
+add_rw_path() {
+	local path="$1"
+	if [[ ! -d "$path" ]]; then
+		warn "Directory does not exist: $path"
+		return 1
+	fi
+	remove_path_from_array additional_ro_paths "$path"
+	remove_path_from_array deny_paths "$path"
+	if ! path_in_array "$path" "${additional_dirs[@]}"; then
+		additional_dirs+=("$path")
+	fi
+	return 0
+}
+
+add_ro_path() {
+	local path="$1"
+	if [[ ! -e "$path" ]]; then
+		warn "Path does not exist for read-only share: $path"
+		return 1
+	fi
+	remove_path_from_array additional_dirs "$path"
+	remove_path_from_array deny_paths "$path"
+	if ! path_in_array "$path" "${additional_ro_paths[@]}"; then
+		additional_ro_paths+=("$path")
+	fi
+	return 0
+}
+
+add_deny_path() {
+	local path="$1"
+	if [[ ! -e "$path" ]]; then
+		warn "Path does not exist for deny rule: $path"
+		return 1
+	fi
+	remove_path_from_array additional_dirs "$path"
+	remove_path_from_array additional_ro_paths "$path"
+	if ! path_in_array "$path" "${deny_paths[@]}"; then
+		deny_paths+=("$path")
+	fi
+}
+
+handle_add_dir_entry() {
+	local raw="$1"
+	local mode="rw"
+	if [[ "$raw" == *":ro" ]]; then
+		raw="${raw%:ro}"
+		mode="ro"
+	elif [[ "$raw" == *":rw" ]]; then
+		raw="${raw%:rw}"
+	fi
+
+	local resolved
+	resolved=$(resolve_path "$raw")
+
+	if [[ -z "$resolved" ]]; then
+		return
+	fi
+
+	case "$mode" in
+		rw)
+			add_rw_path "$resolved"
+			;;
+		ro)
+			add_ro_path "$resolved"
+			;;
+		*)
+			error "Unknown mode for --add-dir entry: $mode"
+			exit 1
+			;;
+	esac
+}
+
 # Check if Docker is available (only when using Docker backend)
 check_docker_dependencies() {
 	# Check for Docker
@@ -655,16 +780,16 @@ run_native_sandbox() {
 		return
 	fi
 	
-	# Prepare write paths for sandbox
-	local write_paths=()
-	
+	# Prepare sandbox access rules
+	local sandbox_rules=()
+
 	# Always allow writes to current project directory
-	write_paths+=("--write" "$current_dir")
+	sandbox_rules+=("--write" "$current_dir")
 	
 	# Add any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
-			write_paths+=("--write" "$dir")
+			sandbox_rules+=("--write" "$dir")
 			log "Adding additional directory: $dir"
 		fi
 	done
@@ -675,11 +800,11 @@ run_native_sandbox() {
 	if [[ ! -d "$HOME/.claude" ]]; then
 		mkdir -p "$HOME/.claude"
 	fi
-	write_paths+=("--write" "$HOME/.claude")
+	sandbox_rules+=("--write" "$HOME/.claude")
 	
 	# Also allow the detected config directory if it's different from ~/.claude
 	if [[ "$claude_config_dir" != "$HOME/.claude" ]]; then
-		write_paths+=("--write" "$claude_config_dir")
+		sandbox_rules+=("--write" "$claude_config_dir")
 	fi
 	
 	# Allow access to main .claude.json file (Claude needs to write to this)
@@ -688,15 +813,26 @@ run_native_sandbox() {
 	if [[ ! -f "$HOME/.claude.json" ]]; then
 		echo "{}" > "$HOME/.claude.json"
 	fi
-	write_paths+=("--write" "$HOME/.claude.json")
+	sandbox_rules+=("--write" "$HOME/.claude.json")
 	
 	# Allow writes to project-specific .claude directory
 	if [[ -d "$project_claude_dir" ]]; then
-		write_paths+=("--write" "$project_claude_dir")
+		sandbox_rules+=("--write" "$project_claude_dir")
 	fi
 	
 	# Allow writes to temp directory for credential syncing
-	write_paths+=("--write" "/tmp")
+	sandbox_rules+=("--write" "/tmp")
+
+	# Apply read-only and deny rules from CLI
+	for ro_path in "${additional_ro_paths[@]}"; do
+		sandbox_rules+=("--read-only" "$ro_path")
+		log "Adding read-only path: $ro_path"
+	done
+
+	for blocked_path in "${deny_paths[@]}"; do
+		sandbox_rules+=("--deny" "$blocked_path")
+		log "Denying path inside sandbox: $blocked_path"
+	done
 	
 	# On macOS, Claude needs to access the Keychain directly
 	# The sandbox-exec Seatbelt profile already allows default system operations
@@ -705,7 +841,11 @@ run_native_sandbox() {
 	# On Linux with bubblewrap, credentials are in files so no special handling needed
 	
 	# Build the command
-	local cmd=("$sandbox_script" "${write_paths[@]}" "--")
+	local cmd=("$sandbox_script")
+	if [[ "$safe_mode" = true ]]; then
+		cmd+=("--safe")
+	fi
+	cmd+=("${sandbox_rules[@]}" "--")
 	
 	# Debug: Show the full sandbox command being executed
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
@@ -790,6 +930,46 @@ run_container() {
 			docker_args+=(-v "$dir":"$dir")
 			log "Mounting additional directory: $dir"
 		fi
+	done
+
+	# Track temporary overlays for deny paths
+	local docker_cleanup_paths=()
+	cleanup_docker_overlays() {
+		for p in "${docker_cleanup_paths[@]}"; do
+			if [[ -n "$p" && -e "$p" ]]; then
+				rm -rf "$p"
+			fi
+		done
+	}
+
+	# Apply read-only mounts
+	for ro_path in "${additional_ro_paths[@]}"; do
+		if [[ -d "$ro_path" ]]; then
+			docker_args+=(-v "$ro_path":"$ro_path":ro)
+		elif [[ -f "$ro_path" ]]; then
+			docker_args+=(-v "$ro_path":"$ro_path":ro)
+		else
+			warn "Skipping read-only mount (path disappeared): $ro_path"
+		fi
+		log "Mounting read-only path: $ro_path"
+	done
+
+	# Apply deny overlays by mounting empty temp locations
+	for blocked_path in "${deny_paths[@]}"; do
+		if [[ -d "$blocked_path" ]]; then
+			tmp_overlay=$(mktemp -d)
+			docker_cleanup_paths+=("$tmp_overlay")
+			docker_args+=(-v "$tmp_overlay":"$blocked_path":ro)
+		elif [[ -f "$blocked_path" ]]; then
+			tmp_overlay=$(mktemp)
+			touch "$tmp_overlay"
+			docker_cleanup_paths+=("$tmp_overlay")
+			docker_args+=(-v "$tmp_overlay":"$blocked_path":ro)
+		else
+			warn "Skipping deny overlay (path disappeared): $blocked_path"
+			continue
+		fi
+		log "Denying path inside container: $blocked_path"
 	done
 
 	# Add TTY flags if available
@@ -937,9 +1117,9 @@ run_container() {
 
 	# Setup cleanup and credentials sync-back on exit
 	if [[ "$allow_oauth_refresh" = true ]]; then
-		trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"' EXIT
+		trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
 	else
-		trap 'rm -rf "$temp_creds_dir"' EXIT
+		trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
 	fi
 
 	# Ensure ~/.claude directory exists and mount it (read-write for state updates)
@@ -1071,6 +1251,10 @@ run_container() {
 			fi
 		fi
 	fi
+	local run_status=$?
+	cleanup_docker_overlays
+	trap - EXIT
+	return $run_status
 }
 
 # Backup Claude Code credentials to a safe location
@@ -1208,6 +1392,8 @@ restore_credentials() {
 # Initialize variables
 claude_args=()
 additional_dirs=()
+additional_ro_paths=()
+deny_paths=()
 custom_env_vars=()
 custom_packages=()
 docker_access=false
@@ -1216,6 +1402,7 @@ enable_background_tasks=false
 rebuild_image=false
 pull_image=false
 shell_mode=false
+safe_mode=false
 claude_command_flag=""
 command_flag=""
 
@@ -1250,6 +1437,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--enable-background-tasks)
 		enable_background_tasks=true
+		shift
+		;;
+	--safe)
+		safe_mode=true
 		shift
 		;;
 	--claude-command | --claude-command=*)
@@ -1303,17 +1494,49 @@ while [[ $# -gt 0 ]]; do
 		done
 		shift 2
 		;;
+	--allow-readonly | --allow-readonly=*)
+		if [[ "$1" == *"="* ]]; then
+			path="${1#*=}"
+			resolved=$(resolve_path "$path")
+			add_ro_path "$resolved"
+			shift
+		else
+			shift
+			if [[ $# -eq 0 ]]; then
+				error "--allow-readonly requires at least one path"
+				exit 1
+			fi
+			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
+				resolved=$(resolve_path "$1")
+				add_ro_path "$resolved"
+				shift
+			done
+		fi
+		;;
+	--deny-path | --deny-path=*)
+		if [[ "$1" == *"="* ]]; then
+			path="${1#*=}"
+			resolved=$(resolve_path "$path")
+			add_deny_path "$resolved"
+			shift
+		else
+			shift
+			if [[ $# -eq 0 ]]; then
+				error "--deny-path requires at least one path"
+				exit 1
+			fi
+			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
+				resolved=$(resolve_path "$1")
+				add_deny_path "$resolved"
+				shift
+			done
+		fi
+		;;
 	--add-dir | --add-dir=*)
 		# Handle --add-dir for both notations - this is a cco flag, not passed to command
 		if [[ "$1" == *"="* ]]; then
-			# --add-dir=<dir> notation
-			dir_path="${1#*=}"
-			if [[ ! -d "$dir_path" ]]; then
-				warn "Directory does not exist: $dir_path"
-			else
-				dir_path=$(cd "$dir_path" && pwd)
-				additional_dirs+=("$dir_path")
-			fi
+			# --add-dir=<dir[:mode]> notation
+			handle_add_dir_entry "${1#*=}"
 			shift
 		else
 			# --add-dir <dir> notation
@@ -1327,19 +1550,13 @@ while [[ $# -gt 0 ]]; do
 						break
 						;;
 					*)
-						dir_path="$1"
-						if [[ ! -d "$dir_path" ]]; then
-							warn "Directory does not exist: $dir_path"
-						else
-							dir_path=$(cd "$dir_path" && pwd)
-							additional_dirs+=("$dir_path")
-						fi
+						handle_add_dir_entry "$1"
 						shift
 						;;
-				esac
-			done
-		fi
-		;;
+					esac
+				done
+			fi
+			;;
 	*)
 		# Not a cco flag, keep for subcommand/Claude processing
 		remaining_args+=("$1")
@@ -1440,6 +1657,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --env, -e KEY=VAL Set environment variable in container"
 		echo "  --packages, -p    Install additional apt packages into container"
 		echo "  --backend TYPE    Force specific sandbox backend (auto, native, docker)"
+		echo "  --safe            Native sandbox only; hides the rest of your home directory"
+		echo "                    Re-expose paths explicitly with --add-dir/--allow-readonly"
 		echo "  --docker (beta)   Mount host Docker socket (Claude can control host Docker; defeats isolation)"
 		echo "  --allow-oauth-refresh (beta)"
 		echo "                    Allow OAuth token refresh with automatic sync-back"
@@ -1457,10 +1676,15 @@ if [[ $# -gt 0 ]]; then
 		echo "                    e.g., --command 'python3' to run Python in the sandbox"
 		echo "                    Can also be set via CCO_COMMAND environment variable"
 		echo "                    Overrides --claude-command when both are specified"
+		echo "  --allow-readonly PATH [PATH ...]"
+		echo "                    Expose files or directories read-only inside the sandbox"
+		echo "  --deny-path PATH [PATH ...]"
+		echo "                    Hide paths from the sandbox (appear empty/unavailable)"
 		echo "  --help, -h        Show this help message"
 		echo ""
 		echo "Claude Code Options (passed through):"
-		echo "  --add-dir <directories...>  Additional directories to allow tool access to"
+		echo "  --add-dir <paths...>        Additional directories to allow tool access to"
+		echo "                             Suffix with :ro or :rw (default) for permissions"
 		echo ""
 		echo "All other arguments are passed to Claude Code inside the container."
 		echo "This means all Claude Code options (--resume, --model, etc.) work normally."
@@ -1506,11 +1730,15 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
-	
+
 	# Check dependencies based on backend
 	check_dependencies
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
 		check_docker_dependencies
+		if [[ "$safe_mode" == true ]]; then
+			warn "--safe is only supported in native sandbox mode; ignoring for Docker backend"
+			safe_mode=false
+		fi
 	fi
 	
 	verify_claude_authentication

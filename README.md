@@ -205,10 +205,21 @@ cco self-update
 
 # Clean up containers
 cco cleanup
+
+# Safe mode (native sandbox): restrict reads under $HOME
+cco --safe
+
+# Share directories read-only or hide them
+cco --add-dir ~/configs:ro
+cco --allow-readonly ~/.ssh
+cco --deny-path ~/Downloads
 ```
 
 - `--docker` (beta): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
 - `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
+- `--safe` (native only): Hides the rest of your `$HOME` from Claude. Only the project directory and explicitly shared paths remain visible.
+- `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
+- `--deny-path PATH`: Hide a path entirely so it becomes inaccessible to Claude (appears empty/unavailable).
 
 ## Command Pass-through
 
@@ -245,6 +256,7 @@ Notes:
 - `--command` replaces the Claude invocation; all following args are passed to your command as-is.
 - `cco` does not add Claude-specific flags to your command (e.g., it won’t append `--dangerously-skip-permissions`).
 - Native/Docker sandboxing still applies, so the command runs contained with only the mounted paths available.
+- Combine with `--allow-readonly` / `--deny-path` / `--add-dir ...:ro` to tighten what your command can read or modify.
 
 ### Codex Mode (`cco codex`)
 
