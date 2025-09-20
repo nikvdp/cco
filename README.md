@@ -4,7 +4,9 @@
 <hr>
 
 
-**cco** (Claude Container, or Claude Condom if you're so inclined) provides essential protection while Claude Code is up close and personal with your system. It automatically selects the best available sandboxing method - using native OS sandboxing (sandbox-exec on macOS, bubblewrap on Linux) when available, or falling back to Docker as a barrier to keep Claude contained while keeping your real system safe.
+**cco** (Claude Condom if you're so inclined) provides essential protection while Claude Code is up close and personal with your system. It automatically selects the best available sandboxing method - using native OS sandboxing (sandbox-exec on macOS, bubblewrap on Linux) when available, or falling back to Docker as a barrier to keep Claude contained while keeping your real system safe.
+
+**UPDATE**: can now sandbox openai's `codex` as well! Just start it with `cco codex` to don your codex condom!
 
 ## Why protection matters
 
@@ -172,6 +174,7 @@ cco --help
 ```
 
 ### Advanced options
+> ⚠️ **Beta security trade-offs**: `--docker` and `--allow-oauth-refresh` weaken isolation. Only enable them if you fully understand and accept the risks (host Docker control, host credential writes).
 ```bash
 # Force a specific sandbox backend
 cco --backend native  # Use native sandbox (sandbox-exec/bubblewrap)
@@ -204,6 +207,9 @@ cco self-update
 cco cleanup
 ```
 
+- `--docker` (beta): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
+- `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
+
 ## Command Pass-through
 
 `cco` acts as a wrapper - any options it doesn't recognize get passed directly to Claude Code:
@@ -217,6 +223,51 @@ cco --no-clipboard "analyze this file"
 # Mix cco and Claude options
 cco --env DEBUG=1 --resume  # `cco` + Claude options
 ```
+
+### Run Arbitrary Commands (`--command`)
+
+You can use `cco` as a generic sandbox wrapper for any CLI, not just Claude. This is helpful when you want a tool to run with full autonomy inside a contained environment.
+
+```bash
+# Run a shell inside the sandbox
+cco --command "bash"
+
+# Run a custom program in the sandbox
+cco --command "python3" - <<'PY'
+print("hello from inside cco")
+PY
+
+# With additional project directories mounted read/write
+cco --add-dir ~/work/secrets --command "ripgrep TODO"
+```
+
+Notes:
+- `--command` replaces the Claude invocation; all following args are passed to your command as-is.
+- `cco` does not add Claude-specific flags to your command (e.g., it won’t append `--dangerously-skip-permissions`).
+- Native/Docker sandboxing still applies, so the command runs contained with only the mounted paths available.
+
+### Codex Mode (`cco codex`)
+
+`cco codex` is a convenience for running OpenAI’s Codex CLI with maximum autonomy while keeping it contained by `cco`.
+
+What it does:
+- Sets the command to `codex --dangerously-bypass-approvals-and-sandbox` so `codex` won’t prompt for permissions and can act autonomously.
+- Mounts `~/.codex` into the sandbox so `codex` can access it.
+- Leaves containment to `cco` (native Seatbelt/bubblewrap or Docker), so `codex` cannot escape mounted paths even with bypass flags.
+
+Examples:
+```bash
+# Start Codex inside cco's sandbox
+cco codex "build and run a small demo"
+
+# Equivalent manual form using --command (when ~/.codex exists)
+cco --add-dir ~/.codex --command "codex --dangerously-bypass-approvals-and-sandbox" "build and run a small demo"
+
+# Add extra directories Codex should be able to access
+cco --add-dir ~/.codex --command "codex --dangerously-bypass-approvals-and-sandbox" "analyze this project"
+```
+
+Security note: `--dangerously-bypass-approvals-and-sandbox` applies to Codex’s internal permission checks, not to `cco`. The `cco` sandbox still constrains filesystem access to your project and explicitly mounted paths. Network access remains unrestricted by design.
 
 ## MCP Server Support
 
@@ -360,7 +411,7 @@ cco restore-creds backup-file.json  # Restore from specific backup
 - If you get authentication errors, your OAuth token may have expired
 - The containerized environment prevents automatic token refresh by default
 - **Solution**: Run `claude` directly (outside `cco`) to re-authenticate, then retry with `cco`
-- For automatic token refresh, try the experimental `--allow-oauth-refresh` flag (use with caution)
+- For automatic token refresh, the beta `--allow-oauth-refresh` flag will sync container credentials back to your host. Only use it if you accept the additional credential tampering risk.
 
 **Docker problems**
 - Start Docker daemon
@@ -371,7 +422,7 @@ cco restore-creds backup-file.json  # Restore from specific backup
 - Try `cco --rebuild` if needed
 
 **Experimental features not working**
-- OAuth refresh (`--allow-oauth-refresh`) is experimental and may have issues
+- OAuth refresh (`--allow-oauth-refresh`) is beta, reduces credential isolation, and may have issues
 - Fallback: authenticate directly with `claude` when tokens expire
 - Use credential backup/restore commands for safety: `cco backup-creds` / `cco restore-creds`
 
