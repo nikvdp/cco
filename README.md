@@ -6,6 +6,8 @@
 
 **cco** (Claude Condom if you're so inclined) provides essential protection while Claude Code is up close and personal with your system. It automatically selects the best available sandboxing method - using native OS sandboxing (sandbox-exec on macOS, bubblewrap on Linux) when available, or falling back to Docker as a barrier to keep Claude contained while keeping your real system safe.
 
+**UPDATE**: can now sandbox openai's `codex` as well! Just start it with `cco codex` to don your codex condom!
+
 ## Why protection matters
 
 Running Claude Code with `--dangerously-skip-permissions` feels great - fast, responsive, no interruptions. But going in unprotected has risks: web search makes Claude vulnerable to prompt injections that could trick it into accessing files outside your project or running unexpected commands.
@@ -222,6 +224,51 @@ cco --no-clipboard "analyze this file"
 cco --env DEBUG=1 --resume  # `cco` + Claude options
 ```
 
+### Run Arbitrary Commands (`--command`)
+
+You can use `cco` as a generic sandbox wrapper for any CLI, not just Claude. This is helpful when you want a tool to run with full autonomy inside a contained environment.
+
+```bash
+# Run a shell inside the sandbox
+cco --command "bash"
+
+# Run a custom program in the sandbox
+cco --command "python3" - <<'PY'
+print("hello from inside cco")
+PY
+
+# With additional project directories mounted read/write
+cco --add-dir ~/work/secrets --command "ripgrep TODO"
+```
+
+Notes:
+- `--command` replaces the Claude invocation; all following args are passed to your command as-is.
+- `cco` does not add Claude-specific flags to your command (e.g., it won’t append `--dangerously-skip-permissions`).
+- Native/Docker sandboxing still applies, so the command runs contained with only the mounted paths available.
+
+### Codex Mode (`cco codex`)
+
+`cco codex` is a convenience for running OpenAI’s Codex CLI with maximum autonomy while keeping it contained by `cco`.
+
+What it does:
+- Sets the command to `codex --dangerously-bypass-approvals-and-sandbox` so `codex` won’t prompt for permissions and can act autonomously.
+- Mounts `~/.codex` into the sandbox so `codex` can access it.
+- Leaves containment to `cco` (native Seatbelt/bubblewrap or Docker), so `codex` cannot escape mounted paths even with bypass flags.
+
+Examples:
+```bash
+# Start Codex inside cco's sandbox
+cco codex "build and run a small demo"
+
+# Equivalent manual form using --command (when ~/.codex exists)
+cco --add-dir ~/.codex --command "codex --dangerously-bypass-approvals-and-sandbox" "build and run a small demo"
+
+# Add extra directories Codex should be able to access
+cco --add-dir ~/.codex --command "codex --dangerously-bypass-approvals-and-sandbox" "analyze this project"
+```
+
+Security note: `--dangerously-bypass-approvals-and-sandbox` applies to Codex’s internal permission checks, not to `cco`. The `cco` sandbox still constrains filesystem access to your project and explicitly mounted paths. Network access remains unrestricted by design.
+
 ## MCP Server Support
 
 `cco` uses host-based networking so that MCP (Model Context Protocol) servers or other tools you may have running on localhost are accessible to `cco`.
@@ -332,12 +379,6 @@ cco --resume
 ```bash
 export ANTHROPIC_API_KEY=sk-key
 cco "review this pull request"
-```
-
-### Using with OpenAI Codex
-```bash
-# Run OpenAI Codex in the same sandbox
-cco --add-dir ~/.codex --command="codex --dangerously-bypass-approvals-and-sandbox"
 ```
 
 ## Experimental Features
