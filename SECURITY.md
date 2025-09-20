@@ -33,26 +33,27 @@ Claude Code runs directly on the host system with full user privileges:
 `cco` addresses these vulnerabilities through strict containerization:
 
 ### Enforced Sandbox
-- **Complete filesystem isolation**: Claude Code can only access the container filesystem plus explicitly mounted directories
-- **No directory escape**: Even if Claude tries to `cd /`, it only reaches the container root
-- **Process isolation**: Claude's processes are contained within the container namespace
+- **Scoped filesystem access**: By default, Claude can read and write the current project directory plus Claude's config paths (`~/.claude`, detected config dir, `.claude.json`). Other host paths are not mounted.
+- **No directory escape**: Even if Claude tries to `cd /`, it only reaches the container or sandbox root.
+- **Process isolation**: Claude's processes are contained within either the container namespace or the native sandbox profile.
+- **Optional safe mode**: `cco --safe` (native sandbox only) hides the rest of `$HOME`, re-exposing only the project and explicitly whitelisted paths so dotfiles and secrets remain unreadable.
 
 ### Network Access (Unrestricted)
-- **Full host network access**: Container shares host network namespace for MCP server connectivity
-- **Internet access**: Can make outbound connections (for Claude's API calls and web search)
-- **Host service access**: Can connect to services on localhost/127.0.0.1
-- **MCP server support**: Can reach Model Context Protocol servers running on host
+- **Full host network access**: Docker mode prefers host networking when available (otherwise uses `host.docker.internal`). Native mode runs directly on the host network. MCP servers and other localhost services remain reachable.
+- **Internet access**: Claude can make outbound connections (API calls, web search, package downloads, etc.).
+- **Service discovery**: Nothing prevents scanning or connecting to internal services; configure those services with their own authentication.
 
 ### Privilege Restriction  
-- **Dynamic user creation**: Container starts as root, creates mapped user, then switches to unprivileged user
-- **Minimal capabilities**: No additional capabilities added beyond Docker defaults
-- **No system modification**: Cannot install packages or modify system files (within container)
+- **Dynamic user creation**: Container starts as root, creates a user matching the host UID/GID, then switches to that unprivileged user for execution.
+- **Minimal capabilities**: Docker runs with the default capability set; no extra privileges are added. Native mode relies on Seatbelt/bubblewrap to constrain operations.
+- **Container-local root**: Inside Docker the mapped user has passwordless sudo (needed for dev tooling) but this does not grant host root unless the Docker socket is mounted.
+- **Host system protection**: Claude cannot modify host files outside mounted paths or install host-level packages.
 
 ### Credential Protection
-- **Runtime extraction**: Fresh credentials extracted from keychain/filesystem for each session
-- **Selective read-only mounting**: Fresh keychain credentials mounted read-only; system config mounted for state updates
-- **No credential persistence**: No credentials stored in Docker images
-- **Default credential isolation**: Claude cannot alter authentication data (unless experimental OAuth refresh is enabled)
+- **Runtime extraction**: Each session fetches fresh Claude credentials (macOS Keychain or Linux config file) into a temporary location.
+- **Read/write reality**: Claude's config directories (`~/.claude`, detected config dir, `.claude.json`) are mounted read-write so it can persist preferences and session state.
+- **Credential file access**: The credentials JSON is mounted read-only by default, so Claude cannot update tokens unless `--allow-oauth-refresh` is explicitly enabled.
+- **No image persistence**: Credentials are never baked into the Docker image; temporary files are cleaned up after the session.
 
 ## Threat Model
 
@@ -125,26 +126,39 @@ Claude Code runs directly on the host system with full user privileges:
 
 **Network Configuration**: Container uses host networking (`--network=host`) to enable MCP server connectivity. This provides full access to host network services but is necessary for intended functionality.
 
-**Filesystem Protection**: Claude configuration and SSH keys are mounted read-only to prevent modification.
+**Filesystem Protection**: Project files plus Claude configuration directories are mounted read/write so the CLI behaves normally; sensitive supporting files like SSH keys and `.gitconfig` are mounted read-only by default.
 
-### File System Isolation
+**Optional Safe Mode (native)**: `cco --safe` adjusts the Seatbelt profile to deny reads under `$HOME` except for the project and explicitly whitelisted paths, reducing exposure of dotfiles and personal secrets. This mode is not available when the Docker backend is in use.
 
-**Accessible to Claude Code**:
-- Current project directory (read-write access)
-- Claude configuration directory (read-only)
-- Git configuration file (read-only)
-- SSH keys for git authentication (read-only)
+### File System Isolation (Default)
 
-**Inaccessible to Claude Code**:
-- System configuration files (`/etc`, `/var`)
-- User cache and history (`~/.cache`, `~/.bash_history`)
-- Other users' home directories
-- Host root filesystem outside mounted directories
-- System binaries and libraries outside container
+| Path / Resource | Access | Notes |
+| ---------------- | ------ | ----- |
+| Current project directory | Read/write | Primary working tree (plus any paths passed with `--add-dir`) |
+| `~/.claude` | Read/write | Session state, MCP configs, logs |
+| Detected config directory (`$XDG_CONFIG_HOME/claude` or `~/.claude`) | Read/write | Needed for new Claude CLI defaults |
+| `~/.claude.json` | Read/write | CLI top-level state file |
+| `~/.ssh` | Read-only | Exposed so git can use host keys; consider using ssh-agent instead |
+| `~/.gitconfig` | Read-only | Git identity and settings |
+| Temporary credential file | Read-only | Mounted at runtime; becomes read/write only with `--allow-oauth-refresh` |
+| Other host paths | No access | Unless explicitly mounted via flags |
+
+**Safe Mode (`--safe`, native only)**
+- Denies read access to the rest of `$HOME` (dotfiles, secrets, caches) unless you explicitly whitelist them with `--add-dir` or additional `--write` holes.
+- Does not apply in Docker mode; use separate host accounts or container hardening if you require similar guarantees when Docker is in use.
 
 ## Experimental Features Security Considerations
 
-⚠️ **The following features are experimental and may introduce additional security risks:**
+⚠️ **The following features are optional and may introduce additional security risks:**
+
+### Host Docker Socket (`--docker`)
+**Purpose**: Mount the host's Docker socket so Claude can build/run containers from inside `cco`.
+
+**Security Implications**:
+- **Host escape**: Access to `/var/run/docker.sock` effectively grants root-equivalent control over the host (Claude can start privileged containers, mount arbitrary paths, etc.).
+- **Audit difficulty**: Actions run inside Docker may be less visible to the user.
+
+**Recommendation**: Avoid this flag unless you fully trust the workload and require nested Docker access. Use a separate, constrained Docker context if possible.
 
 ### OAuth Token Refresh (`--allow-oauth-refresh`)
 **Purpose**: Allows Claude to refresh expired OAuth tokens and sync them back to the host system.
@@ -181,13 +195,13 @@ These experimental features are disabled by default. Only enable them if you und
 ## Risk Assessment
 
 ### High Risk Scenarios (Mitigated by `cco`)
-- **Malicious web content instructs Claude to modify system files**: Contained to container
-- **Prompt injection causes Claude to scan internal network**: Network isolated
-- **Claude attempts to install backdoor software**: No system access
+- **Malicious web content instructs Claude to modify host system files**: Changes stay inside the sandboxed filesystem.
+- **Claude attempts to install persistent host software**: Package installs and service writes affect only the container/sandbox environment.
 
 ### Medium Risk Scenarios (Partially Mitigated)
-- **Claude modifies project source code maliciously**: Still possible, but contained to project
-- **Sensitive project data exfiltrated via API**: Limited to what's in project directory
+- **Claude modifies project source code maliciously**: Still possible; limited to project and whitelisted paths.
+- **Prompt injection causes internal network probing**: Possible because network access is unrestricted—rely on network segmentation and service auth.
+- **Sensitive project data exfiltrated via API**: Limited to data Claude can read (project + mounted paths).
 
 ### Low Risk Scenarios (Not Mitigated)
 - **Claude displays misleading information**: User vigilance required
