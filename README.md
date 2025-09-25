@@ -56,12 +56,12 @@ You should barely notice `cco` is there, except for that reassuring feeling of s
 
 **`cco` runs Claude Code inside a sandboxed environment.** It automatically detects and uses the best available sandboxing method:
 
-- **Native sandboxing (default when available)**: Uses OS-native tools (sandbox-exec on macOS, bubblewrap on Linux) for lightweight, fast isolation
-- **Docker sandboxing (fallback)**: Uses Docker containers when native tools aren't available
+- **Native sandboxing (default when available)**: Uses OS-native tools (sandbox-exec on macOS, bubblewrap on Linux) for lightweight, fast isolation. **Note**: Native sandboxing exposes the entire host filesystem as read-only by default - use `--safe` for stronger filesystem isolation.
+- **Docker sandboxing (fallback)**: Uses Docker containers when native tools aren't available. Provides stronger filesystem isolation by only exposing explicitly mounted paths.
 
 - **Automatic sandbox selection**: Chooses native OS sandboxing when available, Docker as fallback
-- **Native sandbox (preferred)**: Lightweight, fast startup, direct Keychain access on macOS
-- **Docker sandbox (fallback)**: Full isolation with container filesystem when native tools unavailable
+- **Native sandbox (preferred)**: Lightweight, fast startup, direct Keychain access on macOS. Exposes host filesystem read-only by default.
+- **Docker sandbox (fallback)**: Stronger filesystem isolation with container-only filesystem when native tools unavailable
 - **Host file access**: Your project files are accessible so Claude can read and edit them
 - **Network access**: Full host network access for localhost development servers, MCP servers, and web requests
 - **Credential management**: Authentication is handled securely without exposing host credentials
@@ -206,7 +206,7 @@ cco self-update
 # Clean up containers
 cco cleanup
 
-# Safe mode (native sandbox): restrict reads under $HOME
+# Safe mode (native sandbox): hide $HOME for stronger isolation (experimental)
 cco --safe
 
 # Share directories read-only or hide them
@@ -217,7 +217,7 @@ cco --deny-path ~/Downloads
 
 - `--docker` (beta): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
 - `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
-- `--safe` (native only): Hides the rest of your `$HOME` from Claude. Only the project directory and explicitly shared paths remain visible.
+- `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
 - `--deny-path PATH`: Hide a path entirely so it becomes inaccessible to Claude (appears empty/unavailable).
 
@@ -357,6 +357,23 @@ cco
 
 ## Architecture
 
+### Filesystem Isolation Comparison
+
+Understanding the filesystem isolation differences between sandbox modes:
+
+| Sandbox Mode | Host Filesystem Visibility | Isolation Level | Performance | Use Case |
+|--------------|----------------------------|-----------------|-------------|----------|
+| **Docker** | Only mounted paths | **Strongest** | Slower startup | Maximum security |
+| **Native** | Entire host (read-only) | **Basic** | Fastest startup | Development convenience |
+| **Native + `--safe`** | Only project + whitelisted | **Strong** | Fast startup | Security + performance balance (experimental) |
+
+**Key Points:**
+- **Native sandbox (default)**: Exposes your entire host filesystem as read-only. Claude can read any file your user can read, but can only write to the project directory.
+- **Docker sandbox**: Only shows explicitly mounted paths. Claude cannot see or read files outside mounted directories.
+- **`--safe` flag** (experimental): Available only with native sandboxing. Hides your `$HOME` directory entirely while keeping fast native performance. May cause some tools to fail if they require access to dotfiles or configuration in `$HOME`.
+
+**Security recommendation**: Use Docker mode for maximum filesystem isolation, or try `--safe` with native sandboxing for better security with fast performance (experimental - may require `--allow-readonly` for some tools).
+
 ### Sandbox modes
 
 #### Native sandboxing (default when available)
@@ -372,10 +389,13 @@ cco
   - Database clients and network tools
 
 ### Safety features
-- Isolated environment
-- Secure credential mounting
-- Proper permission mapping
-- Fresh session every time
+- **Filesystem isolation**: Level depends on sandbox mode
+  - **Docker mode**: Only project and explicitly mounted paths visible
+  - **Native mode (default)**: Entire host filesystem visible read-only, project read/write
+  - **Native + `--safe`**: Only project and whitelisted paths visible (stronger isolation)
+- **Write protection**: All modes prevent writes outside project directory
+- **Secure credential mounting**: Runtime-only credential access
+- **Fresh session isolation**: Clean environment for each session
 
 ## Examples
 
