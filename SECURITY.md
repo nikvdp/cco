@@ -33,10 +33,10 @@ Claude Code runs directly on the host system with full user privileges:
 `cco` addresses these vulnerabilities through strict containerization:
 
 ### Enforced Sandbox
-- **Scoped filesystem access**: By default, Claude can read and write the current project directory plus Claude's config paths (`~/.claude`, detected config dir, `.claude.json`). Other host paths are not mounted.
-- **No directory escape**: Even if Claude tries to `cd /`, it only reaches the container or sandbox root.
-- **Process isolation**: Claude's processes are contained within either the container namespace or the native sandbox profile.
-- **Optional safe mode**: `cco --safe` (native sandbox only) hides the rest of `$HOME`, re-exposing only the project and explicitly whitelisted paths so dotfiles and secrets remain unreadable.
+- **Scoped filesystem access**: Claude can read/write the current project directory plus Claude-specific config paths (`~/.claude`, detected config dir, `.claude.json`). In Docker mode no other host paths exist unless you mount them. In native mode both Seatbelt (macOS) and bubblewrap (Linux) expose the entire host filesystem as read-only by default; use `--safe` to hide your `$HOME` directory for better isolation.
+- **Directory changes are sandboxed**: `cd /` succeeds, but in Docker mode this is the container's root filesystem (not your host), and in native mode both Seatbelt and bubblewrap deny writes outside the whitelisted paths while still allowing reads of the entire host filesystem.
+- **Process isolation**: Claude's processes are contained within either the container namespace or the native sandbox profile, preventing host-level process injection.
+- **Enhanced safe mode** (experimental): `cco --safe` (native sandbox only) provides stronger filesystem isolation by hiding your `$HOME` directory entirely, leaving only the project directory and explicitly whitelisted paths visible for reads. This significantly reduces exposure compared to the default native sandbox behavior. **Trade-off**: Some tools may fail if they require access to configuration files in `$HOME` - use `--allow-readonly` to selectively expose needed paths.
 
 ### Network Access (Unrestricted)
 - **Full host network access**: Docker mode prefers host networking when available (otherwise uses `host.docker.internal`). Native mode runs directly on the host network. MCP servers and other localhost services remain reachable.
@@ -128,7 +128,7 @@ Claude Code runs directly on the host system with full user privileges:
 
 **Filesystem Protection**: Project files plus Claude configuration directories are mounted read/write so the CLI behaves normally; sensitive supporting files like SSH keys and `.gitconfig` are mounted read-only by default.
 
-**Optional Safe Mode (native)**: `cco --safe` adjusts the Seatbelt profile to deny reads under `$HOME` except for the project and explicitly whitelisted paths, reducing exposure of dotfiles and personal secrets. This mode is not available when the Docker backend is in use.
+**Enhanced Safe Mode (native, experimental)**: `cco --safe` provides stronger filesystem isolation in native mode by hiding your entire `$HOME` directory. On macOS, this adjusts the Seatbelt profile to deny reads under `$HOME`. On Linux, this replaces `$HOME` with an empty tmpfs overlay in bubblewrap. Only the project directory and explicitly whitelisted paths remain accessible. This mode significantly reduces filesystem exposure compared to the default native behavior where the entire host filesystem is visible read-only. **Important**: This is experimental and may cause some development tools to fail if they require access to configuration files or caches in `$HOME`. Safe mode is not available when the Docker backend is in use.
 
 ### File System Isolation (Default)
 
@@ -143,9 +143,18 @@ Claude Code runs directly on the host system with full user privileges:
 | Temporary credential file | Read-only | Mounted at runtime; becomes read/write only with `--allow-oauth-refresh` |
 | Other host paths | No access | Unless explicitly mounted via flags |
 
-**Safe Mode (`--safe`, native only)**
-- Denies read access to the rest of `$HOME` (dotfiles, secrets, caches) unless you explicitly whitelist them with `--add-dir` or additional `--write` holes.
-- Does not apply in Docker mode; use separate host accounts or container hardening if you require similar guarantees when Docker is in use.
+**Safe Mode (`--safe`, native only, experimental)**
+- **Provides stronger filesystem isolation**: Hides your entire `$HOME` directory from Claude, significantly reducing exposure of personal files, dotfiles, secrets, and caches.
+- **macOS behavior**: Uses Seatbelt policies to deny reads under `$HOME`.
+- **Linux behavior**: Uses bubblewrap tmpfs overlay to replace `$HOME` with an empty directory.
+- **Still allows**: Access to project directory and paths explicitly shared via `--add-dir` or `--allow-readonly`.
+- **Compatibility warning**: May cause tools to fail if they need config files in `$HOME`. Use `--allow-readonly ~/.tool-config` to selectively expose needed paths.
+- **Docker limitation**: Safe mode only applies to native sandboxing (Seatbelt/bubblewrap). Docker mode provides inherent isolation by only mounting explicitly specified paths.
+
+**Custom Rules**
+- Use `--allow-readonly PATH` to share specific files/directories read-only without granting write access.
+- Use `--deny-path PATH` to hide a path entirely (appears empty/blocked inside the sandbox). In Docker/bubblewrap this is implemented with empty overlays; in Seatbelt it raises access errors.
+- `--add-dir PATH[:ro|:rw]` lets you control permissions inline when mounting additional content.
 
 ## Experimental Features Security Considerations
 

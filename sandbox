@@ -7,7 +7,7 @@
 set -euo pipefail
 
 usage() {
-	echo "Usage: sandbox [-w|--write PATH]... <command> [args...]"
+	echo "Usage: sandbox [--safe] [-w|--write PATH] [--read-only PATH] [--deny PATH]... <command> [args...]"
 	echo "  PATH may be a directory (RW under it) or a file (RW to that file only)."
 	exit 1
 }
@@ -48,12 +48,31 @@ policy_quote() {
 
 # Parse CLI
 write_paths=()
+ro_paths=()
+deny_paths=()
+safe_mode=false
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--safe)
+		safe_mode=true
+		shift
+		;;
 	-w | --write)
 		shift
 		[[ $# -gt 0 ]] || usage
 		write_paths+=("$(abs_path "$1")")
+		shift
+		;;
+	--read-only)
+		shift
+		[[ $# -gt 0 ]] || usage
+		ro_paths+=("$(abs_path "$1")")
+		shift
+		;;
+	--deny)
+		shift
+		[[ $# -gt 0 ]] || usage
+		deny_paths+=("$(abs_path "$1")")
 		shift
 		;;
 	-h | --help) usage ;;
@@ -92,17 +111,62 @@ run_linux() {
 		[[ -e "$p" ]] && args+=(--ro-bind "$p" "$p")
 	done
 
-	# 3) Overlay RW holes LAST so they take precedence.
-	#    Always include the current directory at its real path.
+	# 3) If safe mode enabled, hide the rest of $HOME by default.
+	if [[ "$safe_mode" == true ]]; then
+		args+=(--tmpfs "$HOME")
+	fi
+
+	# 4) Overlay rules (rw, ro, deny) so they take precedence.
+	# Always include the current directory at its real path.
 	args+=(--bind "$PWD_ABS" "$PWD_ABS")
+
+	# Helper temp resources for deny overlays
+	cleanup_paths=()
+	cleanup_overlays() {
+		for p in "${cleanup_paths[@]}"; do
+			if [[ -n "$p" && -e "$p" ]]; then
+				rm -rf "$p"
+			fi
+		done
+	}
+
 	for ap in "${write_paths[@]}"; do
-		# Ensure files exist so file binds succeed
+		# Ensure targets exist so bind succeeds
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 		args+=(--bind "$ap" "$ap")
 	done
+
+	for ap in "${ro_paths[@]}"; do
+		if [[ -d "$ap" ]]; then
+			args+=(--ro-bind "$ap" "$ap")
+		else
+			if [[ ! -e "$ap" ]]; then : >"$ap"; fi
+			args+=(--ro-bind "$ap" "$ap")
+		fi
+	done
+
+	for ap in "${deny_paths[@]}"; do
+		if [[ -d "$ap" ]]; then
+			empty_dir=$(mktemp -d)
+			cleanup_paths+=("$empty_dir")
+			args+=(--ro-bind "$empty_dir" "$ap")
+		elif [[ -f "$ap" ]]; then
+			empty_file=$(mktemp)
+			cleanup_paths+=("$empty_file")
+		: >"$empty_file"
+			args+=(--ro-bind "$empty_file" "$ap")
+		else
+			empty_dir=$(mktemp -d)
+			cleanup_paths+=("$empty_dir")
+			args+=(--ro-bind "$empty_dir" "$ap")
+		fi
+	done
 	args+=(--chdir "$PWD_ABS")
 
-	exec bwrap "${args[@]}" "$@"
+	bwrap "${args[@]}" "$@"
+	local status=$?
+	cleanup_overlays
+	exit $status
 }
 
 run_macos() {
@@ -115,6 +179,12 @@ run_macos() {
 	for ap in "${write_paths[@]}"; do
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 	done
+	for ap in "${ro_paths[@]}"; do
+		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
+	done
+	for ap in "${deny_paths[@]}"; do
+		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
+	done
 
 	# Build a Seatbelt profile that denies writes globally, then whitelists:
 	# - The current directory (subpath)
@@ -122,7 +192,7 @@ run_macos() {
 	# - Any -w files (literal)
 	policy_file="$(mktemp -t sandbox.seatbelt.XXXXXX)"
 	
-	# Debug mode: Keep policy file for inspection
+	keep_policy=false
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
 		echo "DEBUG: Seatbelt policy file: $policy_file" >&2
 		echo "DEBUG: Write paths being added:" >&2
@@ -130,8 +200,7 @@ run_macos() {
 		for ap in "${write_paths[@]}"; do
 			printf "  Additional: %s\n" "$ap" >&2
 		done
-	else
-		trap 'rm -f "$policy_file"' EXIT
+		keep_policy=true
 	fi
 
 	{
@@ -141,16 +210,50 @@ run_macos() {
 		# Deny ALL file writes first
 		echo "(deny file-write*)"
 		
+		# Optional safe mode: deny reads under $HOME by default, re-allow below
+		if [[ "$safe_mode" == true ]]; then
+			printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$HOME")"
+		fi
+		
 		# Then allow only specific paths we need
 		# 1. Current working directory
 		printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$PWD_ABS")"
+		if [[ "$safe_mode" == true ]]; then
+			printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$PWD_ABS")"
+		fi
 		
 		# 2. Additional paths passed via -w flags
 		for ap in "${write_paths[@]}"; do
 			if [[ -d "$ap" ]]; then
 				printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
+				if [[ "$safe_mode" == true ]]; then
+					printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
+				fi
 			else
 				printf '(allow file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
+				if [[ "$safe_mode" == true ]]; then
+					printf '(allow file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
+				fi
+			fi
+		done
+
+		# Read-only paths: allow reads but keep writes denied
+		for ap in "${ro_paths[@]}"; do
+			if [[ -d "$ap" ]]; then
+				printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
+			else
+				printf '(allow file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
+			fi
+		done
+
+		# Deny paths explicitly
+		for ap in "${deny_paths[@]}"; do
+			if [[ -d "$ap" ]]; then
+				printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
+				printf '(deny file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
+			else
+				printf '(deny file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
+				printf '(deny file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
 			fi
 		done
 		
@@ -178,7 +281,12 @@ run_macos() {
 		printf '(allow file-write* (subpath "%s/Library/Application Support"))\n' "$(policy_quote "$HOME")"
 	} >"$policy_file"
 
-	exec sandbox-exec -f "$policy_file" "$@"
+sandbox-exec -f "$policy_file" "$@"
+local status=$?
+if [[ "$keep_policy" == false ]]; then
+	rm -f "$policy_file"
+fi
+exit $status
 }
 
 case "$OS" in
