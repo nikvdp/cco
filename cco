@@ -312,6 +312,22 @@ find_claude_config_dir() {
 	echo "$primary_dir"
 }
 
+# Check if Claude authentication is needed based on the command being run
+needs_claude_authentication() {
+	# If we're running a custom command (not Claude), skip Claude authentication
+	if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+		return 1  # Don't need Claude auth
+	fi
+	
+	# If we're in shell mode, we don't need Claude authentication
+	if [[ "$shell_mode" = true ]]; then
+		return 1  # Don't need Claude auth
+	fi
+	
+	# Otherwise we need Claude authentication
+	return 0  # Need Claude auth
+}
+
 # Verify Claude Code authentication is available
 verify_claude_authentication() {
 	log "Verifying Claude Code authentication..."
@@ -1741,7 +1757,10 @@ main() {
 		fi
 	fi
 	
-	verify_claude_authentication
+	# Only verify Claude authentication if we need it
+	if needs_claude_authentication; then
+		verify_claude_authentication
+	fi
 
 	# Handle --pull flag first
 	if [[ "$pull_image" = true ]]; then
