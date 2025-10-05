@@ -864,6 +864,9 @@ run_native_sandbox() {
 	if [[ "$safe_mode" = true ]]; then
 		cmd+=("--safe")
 	fi
+	if [[ "$allow_keychain" = true ]]; then
+		cmd+=("--allow-keychain")
+	fi
 	cmd+=("${sandbox_rules[@]}" "--")
 	
 	# Debug: Show the full sandbox command being executed
@@ -1417,6 +1420,7 @@ custom_env_vars=()
 custom_packages=()
 docker_access=false
 allow_oauth_refresh=false
+allow_keychain=false
 enable_background_tasks=false
 rebuild_image=false
 pull_image=false
@@ -1452,6 +1456,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--allow-oauth-refresh)
 		allow_oauth_refresh=true
+		shift
+		;;
+	--allow-keychain)
+		allow_keychain=true
 		shift
 		;;
 	--enable-background-tasks)
@@ -1695,6 +1703,12 @@ if [[ $# -gt 0 ]]; then
 		echo "                    Allow OAuth token refresh with automatic sync-back"
 		echo "                    Grants Claude write access to your host credentials; use only if you accept that risk"
 		echo "                    Creates timestamped backups and uses clondom protection"
+		echo "  --allow-keychain (seatbelt mode, EXPERIMENTAL)"
+		echo "                    Allow Keychain access for OAuth token refresh (DANGEROUS)"
+		echo "                    Grants Claude read/write access to your ENTIRE Keychain"
+		echo "                    Claude can access ALL passwords, certificates, and credentials"
+		echo "                    This is extremely dangerous - only enable if you accept this risk"
+		echo "                    Consider creating a separate Keychain for Claude Code"
 		echo "  --enable-background-tasks"
 		echo "                    Enable Claude Code background tasks (disabled by default)"
 		echo "                    Background tasks provide enhanced functionality like"

@@ -141,6 +141,7 @@ Claude Code runs directly on the host system with full user privileges:
 | `~/.ssh` | Read-only | Exposed so git can use host keys; consider using ssh-agent instead |
 | `~/.gitconfig` | Read-only | Git identity and settings |
 | Temporary credential file | Read-only | Mounted at runtime; becomes read/write only with `--allow-oauth-refresh` |
+| macOS Keychain | No access | Becomes read/write with `--allow-keychain` (CRITICAL security risk) |
 | Other host paths | No access | Unless explicitly mounted via flags |
 
 **Safe Mode (`--safe`, native only, experimental)**
@@ -178,11 +179,37 @@ Claude Code runs directly on the host system with full user privileges:
 - **Sync-back attacks**: Malicious content could potentially manipulate token refresh to corrupt host credentials
 - **Increased attack surface**: More complex credential handling creates more failure modes
 
-**Mitigation**: 
+**Mitigation**:
 - Creates automatic timestamped backups before any credential updates
 - Uses content comparison to detect concurrent modifications
 - Preserves container credentials for manual recovery if sync-back fails
 - Only enables when explicitly requested via `--allow-oauth-refresh`
+
+### Keychain Access (`--allow-keychain`)
+**Purpose**: Allows Claude to access macOS Keychain for OAuth token refresh in seatbelt sandbox mode.
+
+**Security Implications**: **CRITICAL RISK**
+- **Complete Keychain access**: Grants Claude read/write access to your ENTIRE Keychain
+- **Password exposure**: Claude can access ALL stored passwords, certificates, and credentials
+- **Credential theft**: Can extract passwords for websites, SSH keys, encryption certificates, etc.
+- **Keychain manipulation**: Can add, modify, or delete any Keychain entry
+- **System-wide compromise**: Keychain often contains credentials for email, iCloud, Wi-Fi, corporate systems, etc.
+
+**What Claude can do with Keychain access**:
+- `security dump-keychain` - Export ALL passwords and certificates
+- `security find-generic-password -a <any-app>` - Access any application's credentials
+- `security find-internet-password` - Access all stored web passwords
+- `security add-generic-password` - Add malicious credentials
+- `security delete-generic-password` - Remove existing credentials
+
+**Mitigation**:
+- **Disabled by default**: Keychain access is blocked unless explicitly enabled
+- **Explicit opt-in required**: Users must actively choose `--allow-keychain` flag
+- **Clear warnings**: Help text and documentation emphasize the extreme danger
+- **Recommendation**: Create a separate Keychain specifically for Claude Code
+- **Alternative**: Accept token expiration and restart `cco` when needed (secure default)
+
+**Risk Assessment**: **CRITICAL** - This flag effectively defeats Keychain isolation. Only enable if you fully understand and accept the risk of exposing ALL your stored credentials to Claude.
 
 ### Credential Management (`backup-creds`, `restore-creds`)
 **Purpose**: Manual backup and restoration of Claude Code credentials.
