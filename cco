@@ -1572,7 +1572,7 @@ while [[ $# -gt 0 ]]; do
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
 				# Stop if we hit a known subcommand
 				case "$1" in
-					shell|codex|droid|self-update|cleanup|info|backup-creds|restore-creds|pull|rebuild)
+					shell|codex|droid|opencode|self-update|cleanup|info|backup-creds|restore-creds|pull|rebuild)
 						# This is a subcommand, not a directory
 						break
 						;;
@@ -1626,6 +1626,25 @@ if [[ $# -gt 0 ]]; then
 		fi
 		shift
 		# All remaining arguments are passed to droid
+		claude_args=("$@")
+		;;
+	opencode)
+		# OpenCode mode - set up the command and add default directory
+		command_flag="opencode"
+		# Add ~/.opencode to additional directories if it exists
+		if [[ -d "$HOME/.opencode" ]]; then
+			additional_dirs+=("$HOME/.opencode")
+		fi
+		# Add ~/.config/opencode to additional directories if it exists
+		if [[ -d "$HOME/.config/opencode" ]]; then
+			additional_dirs+=("$HOME/.config/opencode")
+		fi
+		# Add ~/.cache/opencode to additional directories if it exists
+		if [[ -d "$HOME/.cache/opencode" ]]; then
+			additional_dirs+=("$HOME/.cache/opencode")
+		fi
+		shift
+		# All remaining arguments are passed to opencode
 		claude_args=("$@")
 		;;
 	cleanup)
@@ -1684,6 +1703,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  shell [cmd...]    Start interactive shell or run shell command in the cco container"
 		echo "  codex [args...]   Run OpenAI Codex in sandbox (equivalent to --add-dir ~/.codex --command=\"codex --dangerously-bypass-approvals-and-sandbox\")"
 		echo "  droid [args...]   Run Droid CLI in sandbox (equivalent to --add-dir ~/.factory --command=\"droid\")"
+		echo "  opencode [args...]   Run OpenCode in sandbox (equivalent to --add-dir ~/.opencode ~/.config/opencode ~/.cache/opencode --command=\"opencode\")"
 		echo "  cleanup           Remove all cco containers"
 		echo "  info              Show system information and readiness status"
 		echo "  pull              Pull latest pre-built image from registry"
