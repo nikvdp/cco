@@ -1643,6 +1643,10 @@ if [[ $# -gt 0 ]]; then
 		if [[ -d "$HOME/.cache/opencode" ]]; then
 			additional_dirs+=("$HOME/.cache/opencode")
 		fi
+		# Add ~/.local/share/opencode to additional directories if it exists
+		if [[ -d "$HOME/.local/share/opencode" ]]; then
+			additional_dirs+=("$HOME/.local/share/opencode")
+		fi
 		shift
 		# All remaining arguments are passed to opencode
 		claude_args=("$@")
@@ -1703,7 +1707,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  shell [cmd...]    Start interactive shell or run shell command in the cco container"
 		echo "  codex [args...]   Run OpenAI Codex in sandbox (equivalent to --add-dir ~/.codex --command=\"codex --dangerously-bypass-approvals-and-sandbox\")"
 		echo "  droid [args...]   Run Droid CLI in sandbox (equivalent to --add-dir ~/.factory --command=\"droid\")"
-		echo "  opencode [args...]   Run OpenCode in sandbox (equivalent to --add-dir ~/.opencode ~/.config/opencode ~/.cache/opencode --command=\"opencode\")"
+		echo "  opencode [args...]   Run OpenCode in sandbox (equivalent to --add-dir ~/.opencode ~/.config/opencode ~/.cache/opencode ~/.local/share/opencode --command=\"opencode\")"
 		echo "  cleanup           Remove all cco containers"
 		echo "  info              Show system information and readiness status"
 		echo "  pull              Pull latest pre-built image from registry"
