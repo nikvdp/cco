@@ -613,9 +613,6 @@ update_cco() {
 	new_version=$(git rev-parse --short HEAD)
 	log "Updated to $new_version"
 
-	log "Rebuilding Docker image with latest changes..."
-	build_image
-
 	cd "$original_dir"
 	log "Update complete!"
 }
@@ -1819,18 +1816,19 @@ main() {
 		verify_claude_authentication
 	fi
 
-	# Handle --pull flag first
-	if [[ "$pull_image" = true ]]; then
-		log "Pulling latest pre-built image..."
-		if pull_prebuilt_image; then
-			log "Pull completed successfully"
-		else
-			warn "Failed to pull pre-built image, using existing or building locally"
-		fi
-	fi
-
 	# Only handle Docker image operations if using Docker backend
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
+		# Handle --pull flag first
+		if [[ "$pull_image" = true ]]; then
+			log "Pulling latest pre-built image..."
+			if pull_prebuilt_image; then
+				log "Pull completed successfully"
+			else
+				warn "Failed to pull pre-built image, using existing or building locally"
+			fi
+		fi
+
+
 		# Determine whether to pull pre-built image or build locally
 		if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
 			# No local image exists
