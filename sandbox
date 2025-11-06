@@ -7,8 +7,9 @@
 set -euo pipefail
 
 usage() {
-	echo "Usage: sandbox [--safe] [-w|--write PATH] [--read-only PATH] [--deny PATH]... <command> [args...]"
+	echo "Usage: sandbox [--safe] [--allow-keychain] [-w|--write PATH] [--read-only PATH] [--deny PATH]... <command> [args...]"
 	echo "  PATH may be a directory (RW under it) or a file (RW to that file only)."
+	echo "  --allow-keychain: Allow access to macOS Keychain (DANGEROUS - grants read/write access to ALL Keychain entries)"
 	exit 1
 }
 
@@ -51,6 +52,7 @@ write_paths=()
 ro_paths=()
 deny_paths=()
 safe_mode=false
+allow_keychain=false
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--safe)
@@ -73,6 +75,10 @@ while [[ $# -gt 0 ]]; do
 		shift
 		[[ $# -gt 0 ]] || usage
 		deny_paths+=("$(abs_path "$1")")
+		shift
+		;;
+	--allow-keychain)
+		allow_keychain=true
 		shift
 		;;
 	-h | --help) usage ;;
@@ -279,6 +285,18 @@ run_macos() {
 		printf '(allow file-write* (subpath "%s/Library/Caches"))\n' "$(policy_quote "$HOME")"
 		printf '(allow file-write* (subpath "%s/Library/Logs"))\n' "$(policy_quote "$HOME")"
 		printf '(allow file-write* (subpath "%s/Library/Application Support"))\n' "$(policy_quote "$HOME")"
+
+		# 6. Keychain access for OAuth token refresh (only if explicitly allowed)
+		if [[ "$allow_keychain" == true ]]; then
+			printf '(allow file-read* (subpath "%s/Library/Keychains"))\n' "$(policy_quote "$HOME")"
+			printf '(allow file-read* (subpath "/Library/Keychains"))\n'
+			printf '(allow file-write* (subpath "%s/Library/Keychains"))\n' "$(policy_quote "$HOME")"
+			# Security framework and keychain services
+			echo "(allow system-mac-syscall (syscall-number 73))"  # keychain access
+			echo "(allow mach-lookup (global-name \"com.apple.securityd\"))"
+			echo "(allow mach-lookup (global-name \"com.apple.security.othersigning\"))"
+			echo "(allow mach-lookup (global-name \"com.apple.security.credentialstore\"))"
+		fi
 	} >"$policy_file"
 
 sandbox-exec -f "$policy_file" "$@"
