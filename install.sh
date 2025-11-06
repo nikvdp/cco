@@ -273,7 +273,7 @@ show_usage() {
 	info "  1. Make sure Claude Code is authenticated"
 	info "  2. Run cco in any project directory: ${BLUE}cco${NC}"
 	info "  3. For help: ${BLUE}cco --help${NC}"
-	info "  4. To update: ${BLUE}cco --self-update${NC}"
+	info "  4. To update: ${BLUE}cco self-update${NC}"
 	info ""
 	info "📖 Documentation: https://github.com/${GITHUB_REPO}"
 	info ""
