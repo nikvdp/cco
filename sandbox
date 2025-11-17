@@ -129,20 +129,20 @@ run_linux() {
 	# Helper temp resources for deny overlays
 	cleanup_paths=()
 	cleanup_overlays() {
-		for p in "${cleanup_paths[@]}"; do
+		for p in "${cleanup_paths[@]+"${cleanup_paths[@]}"}"; do
 			if [[ -n "$p" && -e "$p" ]]; then
 				rm -rf "$p"
 			fi
 		done
 	}
 
-	for ap in "${write_paths[@]}"; do
+	for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
 		# Ensure targets exist so bind succeeds
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 		args+=(--bind "$ap" "$ap")
 	done
 
-	for ap in "${ro_paths[@]}"; do
+	for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
 		if [[ -d "$ap" ]]; then
 			args+=(--ro-bind "$ap" "$ap")
 		else
@@ -151,7 +151,7 @@ run_linux() {
 		fi
 	done
 
-	for ap in "${deny_paths[@]}"; do
+	for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
 		if [[ -d "$ap" ]]; then
 			empty_dir=$(mktemp -d)
 			cleanup_paths+=("$empty_dir")
@@ -182,13 +182,13 @@ run_macos() {
 	}
 
 	# Ensure any whitelisted *files* exist so Seatbelt can actually write to them
-	for ap in "${write_paths[@]}"; do
+	for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 	done
-	for ap in "${ro_paths[@]}"; do
+	for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 	done
-	for ap in "${deny_paths[@]}"; do
+	for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 	done
 
@@ -203,7 +203,7 @@ run_macos() {
 		echo "DEBUG: Seatbelt policy file: $policy_file" >&2
 		echo "DEBUG: Write paths being added:" >&2
 		printf "  PWD: %s\n" "$PWD_ABS" >&2
-		for ap in "${write_paths[@]}"; do
+		for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
 			printf "  Additional: %s\n" "$ap" >&2
 		done
 		keep_policy=true
@@ -229,7 +229,7 @@ run_macos() {
 		fi
 		
 		# 2. Additional paths passed via -w flags
-		for ap in "${write_paths[@]}"; do
+		for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
 			if [[ -d "$ap" ]]; then
 				printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
 				if [[ "$safe_mode" == true ]]; then
@@ -244,7 +244,7 @@ run_macos() {
 		done
 
 		# Read-only paths: allow reads but keep writes denied
-		for ap in "${ro_paths[@]}"; do
+		for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
 			if [[ -d "$ap" ]]; then
 				printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
 			else
@@ -253,7 +253,7 @@ run_macos() {
 		done
 
 		# Deny paths explicitly
-		for ap in "${deny_paths[@]}"; do
+		for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
 			if [[ -d "$ap" ]]; then
 				printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
 				printf '(deny file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
