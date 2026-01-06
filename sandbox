@@ -104,6 +104,56 @@ run_linux() {
 		exit 127
 	}
 
+	# Get the directory where this script is located (for finding seccomp filters)
+	local script_dir
+	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	local seccomp_dir="$script_dir/seccomp"
+	local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/cco"
+
+	# Setup seccomp filter to block TIOCSTI/TIOCLINUX sandbox escape (CVE-2017-5226, CVE-2023-1523)
+	local seccomp_filter=""
+	local arch
+	arch="$(uname -m)"
+
+	case "$arch" in
+	x86_64)
+		if [[ -f "$seccomp_dir/tiocsti_filter_x86_64.bpf" ]]; then
+			seccomp_filter="$seccomp_dir/tiocsti_filter_x86_64.bpf"
+		fi
+		;;
+	aarch64)
+		if [[ -f "$seccomp_dir/tiocsti_filter_aarch64.bpf" ]]; then
+			seccomp_filter="$seccomp_dir/tiocsti_filter_aarch64.bpf"
+		fi
+		;;
+	*)
+		# Exotic architecture - try to compile from source
+		local compiled_filter="$cache_dir/tiocsti_filter_${arch}.bpf"
+		if [[ -f "$compiled_filter" ]]; then
+			seccomp_filter="$compiled_filter"
+		elif [[ -f "$seccomp_dir/tiocsti_filter.c" ]]; then
+			# Try to compile the filter
+			if command -v cc >/dev/null 2>&1; then
+				mkdir -p "$cache_dir"
+				local filter_gen="$cache_dir/tiocsti_filter_gen"
+				if cc -O2 -o "$filter_gen" "$seccomp_dir/tiocsti_filter.c" 2>/dev/null; then
+					if "$filter_gen" "$compiled_filter" >/dev/null 2>&1; then
+						seccomp_filter="$compiled_filter"
+						rm -f "$filter_gen"
+					fi
+				fi
+			fi
+		fi
+		;;
+	esac
+
+	# Warn if we couldn't set up seccomp protection
+	if [[ -z "$seccomp_filter" ]]; then
+		echo "sandbox: WARNING: Could not set up TIOCSTI protection for architecture '$arch'." >&2
+		echo "sandbox: The sandbox may be vulnerable to terminal injection attacks." >&2
+		echo "sandbox: To fix on exotic architectures, install a C compiler (gcc/clang)." >&2
+	fi
+
 	# 1) Base: make root view RO; keep /dev, /proc, and a tmpfs /tmp; DO NOT unshare net.
 	args=(--die-with-parent
 		--ro-bind / /
@@ -111,6 +161,11 @@ run_linux() {
 		--proc /proc
 		--tmpfs /tmp
 	)
+
+	# Add seccomp filter if available (blocks TIOCSTI/TIOCLINUX sandbox escape)
+	if [[ -n "$seccomp_filter" && -f "$seccomp_filter" ]]; then
+		args+=(--seccomp 10)
+	fi
 
 	# 2) Common top-level mount points RO so writable mounts can’t leak through.
 	for p in /home /var /root /run /opt /srv /media /mnt /usr /etc /sys; do
@@ -169,7 +224,12 @@ run_linux() {
 	done
 	args+=(--chdir "$PWD_ABS")
 
-	bwrap "${args[@]}" "$@"
+	# Execute bwrap with seccomp filter on fd 10 if available
+	if [[ -n "$seccomp_filter" && -f "$seccomp_filter" ]]; then
+		bwrap "${args[@]}" "$@" 10<"$seccomp_filter"
+	else
+		bwrap "${args[@]}" "$@"
+	fi
 	local status=$?
 	cleanup_overlays
 	exit $status
