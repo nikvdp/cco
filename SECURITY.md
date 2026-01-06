@@ -128,6 +128,8 @@ Claude Code runs directly on the host system with full user privileges:
 
 **Filesystem Protection**: Project files plus Claude configuration directories are mounted read/write so the CLI behaves normally; sensitive supporting files like SSH keys and `.gitconfig` are mounted read-only by default.
 
+**Terminal Injection Protection (Linux)**: The bubblewrap sandbox includes seccomp filtering to block TIOCSTI and TIOCLINUX ioctls, preventing terminal injection attacks that could otherwise escape the sandbox. See [Terminal Injection Attacks](#terminal-injection-attacks-linux) below for details.
+
 **Enhanced Safe Mode (native, experimental)**: `cco --safe` provides stronger filesystem isolation in native mode by hiding your entire `$HOME` directory. On macOS, this adjusts the Seatbelt profile to deny reads under `$HOME`. On Linux, this replaces `$HOME` with an empty tmpfs overlay in bubblewrap. Only the project directory and explicitly whitelisted paths remain accessible. This mode significantly reduces filesystem exposure compared to the default native behavior where the entire host filesystem is visible read-only. **Important**: This is experimental and may cause some development tools to fail if they require access to configuration files or caches in `$HOME`. Safe mode is not available when the Docker backend is in use.
 
 ### File System Isolation (Default)
@@ -156,6 +158,45 @@ Claude Code runs directly on the host system with full user privileges:
 - Use `--allow-readonly PATH` to share specific files/directories read-only without granting write access.
 - Use `--deny-path PATH` to hide a path entirely (appears empty/blocked inside the sandbox). In Docker/bubblewrap this is implemented with empty overlays; in Seatbelt it raises access errors.
 - `--add-dir PATH[:ro|:rw]` lets you control permissions inline when mounting additional content.
+
+## Terminal Injection Attacks (Linux)
+
+### The Vulnerability
+
+On Linux, sandboxed processes can potentially escape containment through terminal injection attacks using the TIOCSTI and TIOCLINUX ioctls:
+
+**TIOCSTI (CVE-2017-5226)**: This ioctl allows a process to inject characters into the terminal's input queue, effectively "typing" keystrokes. A sandboxed process sharing a controlling terminal with its parent can inject commands that execute in the parent shell after the sandbox exits.
+
+**TIOCLINUX (CVE-2023-1523)**: Similar to TIOCSTI, this ioctl can inject input on Linux virtual consoles, providing another vector for terminal-based sandbox escape.
+
+### How `cco` Mitigates This
+
+The bubblewrap sandbox on Linux uses seccomp filtering to block these dangerous ioctls:
+
+- **Pre-compiled BPF filters**: Ships with architecture-specific seccomp filters for x86_64 and aarch64 that block TIOCSTI and TIOCLINUX
+- **Automatic fallback**: On other architectures, compiles the filter from source on first run (requires only a C compiler, no libraries)
+- **Security hardening**: Filters include 32-bit command masking to prevent bypass attempts, x32 ABI rejection on x86_64, and architecture validation
+
+When these ioctls are blocked, any attempt to use them returns EPERM (Operation not permitted) instead of succeeding.
+
+### Why Not Use `--new-session`?
+
+Bubblewrap's `--new-session` flag would also prevent TIOCSTI attacks by detaching the sandbox from the controlling terminal. However, this breaks interactive terminal functionality that Claude Code requires (prompts, terminal resizing, job control). The seccomp approach blocks only the dangerous ioctls while preserving full TTY interactivity.
+
+### Verification
+
+You can verify the protection is working:
+
+```bash
+# Inside the sandbox, TIOCSTI should be blocked
+./sandbox -- python3 -c "import fcntl; fcntl.ioctl(0, 0x5412, b'x')"
+# Should fail with: OSError: [Errno 1] Operation not permitted
+```
+
+### Limitations
+
+- **macOS**: The Seatbelt sandbox on macOS does not require this mitigation as it uses a different security model
+- **Docker mode**: Docker containers have their own isolation and don't share a controlling terminal with the host in the same way
 
 ## Experimental Features Security Considerations
 

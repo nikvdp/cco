@@ -396,6 +396,7 @@ Understanding the filesystem isolation differences between sandbox modes:
 - **Write protection**: All modes prevent writes outside project directory
 - **Secure credential mounting**: Runtime-only credential access
 - **Fresh session isolation**: Clean environment for each session
+- **Terminal injection protection**: Linux sandbox blocks TIOCSTI/TIOCLINUX attacks via seccomp filtering
 
 ## Examples
 
