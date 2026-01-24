@@ -298,6 +298,43 @@ run_macos() {
 		keep_policy=true
 	fi
 
+	# Helper: check if path is under (or equal to) another path
+	is_subpath_of() {
+		local child="$1"
+		local parent="$2"
+		[[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+	}
+
+	# Compute allow exceptions that fall under deny paths
+	# These need special ordering: deny first, then allow exception
+	declare -a deny_exceptions_write=()
+	declare -a deny_exceptions_ro=()
+
+	for deny in "${deny_paths[@]+"${deny_paths[@]}"}"; do
+		for wp in "${write_paths[@]+"${write_paths[@]}"}"; do
+			if is_subpath_of "$wp" "$deny"; then
+				deny_exceptions_write+=("$deny:$wp")
+			fi
+		done
+		for rp in "${ro_paths[@]+"${ro_paths[@]}"}"; do
+			if is_subpath_of "$rp" "$deny"; then
+				deny_exceptions_ro+=("$deny:$rp")
+			fi
+		done
+	done
+
+	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
+		if [[ ${#deny_exceptions_write[@]} -gt 0 || ${#deny_exceptions_ro[@]} -gt 0 ]]; then
+			echo "DEBUG: Allow-inside-deny exceptions:" >&2
+			for exc in "${deny_exceptions_write[@]+"${deny_exceptions_write[@]}"}"; do
+				echo "  write: ${exc#*:} (under ${exc%%:*})" >&2
+			done
+			for exc in "${deny_exceptions_ro[@]+"${deny_exceptions_ro[@]}"}"; do
+				echo "  read-only: ${exc#*:} (under ${exc%%:*})" >&2
+			done
+		fi
+	fi
+
 	{
 		echo "(version 1)"
 		echo "(allow default)"
@@ -310,6 +347,18 @@ run_macos() {
 			printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$HOME")"
 		fi
 
+		# Deny paths explicitly (BEFORE any allows that might be under them)
+		# Seatbelt uses LAST-MATCH-WINS, so deny must come before allow exceptions
+		for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
+			if [[ -d "$ap" ]]; then
+				printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
+				printf '(deny file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
+			else
+				printf '(deny file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
+				printf '(deny file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
+			fi
+		done
+
 		# Then allow only specific paths we need
 		# 1. Current working directory
 		printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$PWD_ABS")"
@@ -319,14 +368,27 @@ run_macos() {
 
 		# 2. Additional paths passed via -w flags
 		for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
+			# Check if this write path is under any deny path - if so, also allow reads
+			needs_read=false
+			if [[ "$safe_mode" == true ]]; then
+				needs_read=true
+			else
+				for deny in "${deny_paths[@]+"${deny_paths[@]}"}"; do
+					if is_subpath_of "$ap" "$deny"; then
+						needs_read=true
+						break
+					fi
+				done
+			fi
+
 			if [[ -d "$ap" ]]; then
 				printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
-				if [[ "$safe_mode" == true ]]; then
+				if [[ "$needs_read" == true ]]; then
 					printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
 				fi
 			else
 				printf '(allow file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
-				if [[ "$safe_mode" == true ]]; then
+				if [[ "$needs_read" == true ]]; then
 					printf '(allow file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
 				fi
 			fi
@@ -338,17 +400,6 @@ run_macos() {
 				printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
 			else
 				printf '(allow file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
-			fi
-		done
-
-		# Deny paths explicitly
-		for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
-			if [[ -d "$ap" ]]; then
-				printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
-				printf '(deny file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
-			else
-				printf '(deny file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
-				printf '(deny file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
 			fi
 		done
 

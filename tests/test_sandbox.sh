@@ -200,6 +200,71 @@ else
 fi
 
 #
+# Allow-inside-deny tests
+#
+
+echo ""
+echo "--- Allow-Inside-Deny Tests ---"
+
+# Setup for allow-inside-deny tests
+# Use $HOME subdir instead of $TEST_DIR (/var/folders) because /var/folders is globally writable
+AID_TEST_DIR="$HOME/.sandbox_aid_test_$$"
+mkdir -p "$AID_TEST_DIR/parent/child"
+echo "child_content" >"$AID_TEST_DIR/parent/child/file.txt"
+echo "sibling_content" >"$AID_TEST_DIR/parent/sibling.txt"
+
+echo "Test: --read-only inside --deny allows reads to child"
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "child_content" ]]; then
+	pass "--read-only inside --deny allows reads to child"
+else
+	fail "--read-only inside --deny: could not read child, got '$output'"
+fi
+
+echo "Test: --read-only inside --deny still blocks sibling"
+if ./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/sibling.txt" 2>/dev/null; then
+	fail "--read-only inside --deny: sibling was readable"
+else
+	pass "--read-only inside --deny still blocks sibling"
+fi
+
+echo "Test: --read-only inside --deny blocks listing parent"
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- ls "$AID_TEST_DIR/parent" 2>/dev/null) && [[ -n "$output" ]]; then
+	fail "--read-only inside --deny: parent was listable: '$output'"
+else
+	pass "--read-only inside --deny blocks listing parent"
+fi
+
+echo "Test: -w inside --deny allows writes to child"
+echo "original" >"$AID_TEST_DIR/parent/child/file.txt"
+if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- sh -c "echo modified > '$AID_TEST_DIR/parent/child/file.txt'" 2>/dev/null; then
+	if [[ "$(cat "$AID_TEST_DIR/parent/child/file.txt")" == "modified" ]]; then
+		pass "-w inside --deny allows writes to child"
+	else
+		fail "-w inside --deny: write succeeded but content wrong"
+	fi
+else
+	fail "-w inside --deny: could not write to child"
+fi
+
+echo "Test: -w inside --deny allows reads to child"
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "modified" ]]; then
+	pass "-w inside --deny allows reads to child"
+else
+	fail "-w inside --deny: could not read child, got '$output'"
+fi
+
+echo "Test: -w inside --deny blocks writes to parent"
+if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- sh -c "echo bad > '$AID_TEST_DIR/parent/badfile.txt'" 2>/dev/null; then
+	fail "-w inside --deny: parent was writable"
+	rm -f "$AID_TEST_DIR/parent/badfile.txt"
+else
+	pass "-w inside --deny blocks writes to parent"
+fi
+
+# Cleanup allow-inside-deny test dir
+rm -rf "$AID_TEST_DIR"
+
+#
 # Safe mode tests
 #
 
