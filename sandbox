@@ -215,35 +215,131 @@ run_linux() {
 		done
 	}
 
-	for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
-		# Ensure targets exist so bind succeeds
-		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
-		args+=(--bind "$ap" "$ap")
-	done
+	# Helper: check if path is under (or equal to) another path
+	is_subpath_of() {
+		local child="$1"
+		local parent="$2"
+		[[ "$child" == "$parent" || "$child" == "$parent"/* ]]
+	}
 
-	for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
-		if [[ -d "$ap" ]]; then
-			args+=(--ro-bind "$ap" "$ap")
-		else
-			if [[ ! -e "$ap" ]]; then : >"$ap"; fi
-			args+=(--ro-bind "$ap" "$ap")
+	# Compute which allow paths are under which deny paths
+	# Format: associative tracking via arrays
+	declare -a deny_has_exceptions=()
+	for i in "${!deny_paths[@]}"; do
+		deny_has_exceptions[i]=false
+		local deny="${deny_paths[$i]}"
+		for wp in "${write_paths[@]+"${write_paths[@]}"}"; do
+			if is_subpath_of "$wp" "$deny"; then
+				deny_has_exceptions[i]=true
+				break
+			fi
+		done
+		if [[ "${deny_has_exceptions[$i]}" == false ]]; then
+			for rp in "${ro_paths[@]+"${ro_paths[@]}"}"; do
+				if is_subpath_of "$rp" "$deny"; then
+					deny_has_exceptions[i]=true
+					break
+				fi
+			done
 		fi
 	done
 
-	for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
-		if [[ -d "$ap" ]]; then
-			empty_dir=$(mktemp -d)
-			cleanup_paths+=("$empty_dir")
-			args+=(--ro-bind "$empty_dir" "$ap")
-		elif [[ -f "$ap" ]]; then
-			empty_file=$(mktemp)
-			cleanup_paths+=("$empty_file")
-			: >"$empty_file"
-			args+=(--ro-bind "$empty_file" "$ap")
+	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
+		for i in "${!deny_paths[@]}"; do
+			if [[ "${deny_has_exceptions[$i]}" == true ]]; then
+				echo "DEBUG: Deny path with exceptions: ${deny_paths[$i]}" >&2
+			fi
+		done
+	fi
+
+	# Process write paths that are NOT under any deny path
+	for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
+		local under_deny=false
+		for deny in "${deny_paths[@]+"${deny_paths[@]}"}"; do
+			if is_subpath_of "$ap" "$deny"; then
+				under_deny=true
+				break
+			fi
+		done
+		if [[ "$under_deny" == false ]]; then
+			# Ensure targets exist so bind succeeds
+			if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
+			args+=(--bind "$ap" "$ap")
+		fi
+	done
+
+	# Process read-only paths that are NOT under any deny path
+	for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
+		local under_deny=false
+		for deny in "${deny_paths[@]+"${deny_paths[@]}"}"; do
+			if is_subpath_of "$ap" "$deny"; then
+				under_deny=true
+				break
+			fi
+		done
+		if [[ "$under_deny" == false ]]; then
+			if [[ -d "$ap" ]]; then
+				args+=(--ro-bind "$ap" "$ap")
+			else
+				if [[ ! -e "$ap" ]]; then : >"$ap"; fi
+				args+=(--ro-bind "$ap" "$ap")
+			fi
+		fi
+	done
+
+	# Process deny paths
+	for i in "${!deny_paths[@]}"; do
+		local ap="${deny_paths[$i]}"
+
+		if [[ "${deny_has_exceptions[$i]}" == true ]]; then
+			# Deny path with exceptions: use tmpfs, then mount exceptions on top
+			if [[ -d "$ap" ]]; then
+				args+=(--tmpfs "$ap")
+			else
+				# For files, still use empty file overlay
+				empty_file=$(mktemp)
+				cleanup_paths+=("$empty_file")
+				: >"$empty_file"
+				args+=(--ro-bind "$empty_file" "$ap")
+			fi
+
+			# Now mount allowed subpaths on top of the tmpfs
+			for wp in "${write_paths[@]+"${write_paths[@]}"}"; do
+				if is_subpath_of "$wp" "$ap"; then
+					if [[ -d "$wp" ]]; then
+						args+=(--bind "$wp" "$wp")
+					else
+						if [[ ! -e "$wp" ]]; then : >"$wp"; fi
+						args+=(--bind "$wp" "$wp")
+					fi
+				fi
+			done
+			for rp in "${ro_paths[@]+"${ro_paths[@]}"}"; do
+				if is_subpath_of "$rp" "$ap"; then
+					if [[ -d "$rp" ]]; then
+						args+=(--ro-bind "$rp" "$rp")
+					else
+						if [[ ! -e "$rp" ]]; then : >"$rp"; fi
+						args+=(--ro-bind "$rp" "$rp")
+					fi
+				fi
+			done
 		else
-			empty_dir=$(mktemp -d)
-			cleanup_paths+=("$empty_dir")
-			args+=(--ro-bind "$empty_dir" "$ap")
+			# Deny path without exceptions: use empty overlay (current behavior)
+			if [[ -d "$ap" ]]; then
+				empty_dir=$(mktemp -d)
+				cleanup_paths+=("$empty_dir")
+				args+=(--ro-bind "$empty_dir" "$ap")
+			elif [[ -f "$ap" ]]; then
+				empty_file=$(mktemp)
+				cleanup_paths+=("$empty_file")
+				: >"$empty_file"
+				args+=(--ro-bind "$empty_file" "$ap")
+			else
+				empty_dir=$(mktemp -d)
+				cleanup_paths+=("$empty_dir")
+				args+=(--ro-bind "$empty_dir" "$ap")
+			fi
 		fi
 	done
 	args+=(--chdir "$PWD_ABS")
