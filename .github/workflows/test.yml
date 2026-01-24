@@ -2,104 +2,59 @@ name: Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
 
 jobs:
   test-linux:
     strategy:
       matrix:
         include:
-          - platform: linux/amd64
-            runner: ubuntu-22.04
+          - runner: ubuntu-22.04
             arch: x86_64
-          - platform: linux/arm64
-            runner: ubuntu-22.04-arm
+          - runner: ubuntu-22.04-arm
             arch: aarch64
     runs-on: ${{ matrix.runner }}
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Install bubblewrap
-      run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
-    - name: Verify architecture
-      run: |
-        echo "Expected: ${{ matrix.arch }}"
-        echo "Actual: $(uname -m)"
-        test "$(uname -m)" = "${{ matrix.arch }}"
+      - name: Verify architecture
+        run: |
+          echo "Expected: ${{ matrix.arch }}"
+          echo "Actual: $(uname -m)"
+          test "$(uname -m)" = "${{ matrix.arch }}"
 
-    - name: Verify seccomp filter exists
-      run: |
-        case "${{ matrix.arch }}" in
-          x86_64)  filter="seccomp/tiocsti_filter_x86_64.bpf" ;;
-          aarch64) filter="seccomp/tiocsti_filter_aarch64.bpf" ;;
-        esac
-        test -f "$filter"
-        echo "Filter exists: $filter ($(wc -c < "$filter") bytes)"
+      - name: Run cross-platform sandbox tests
+        run: ./tests/test_sandbox.sh
 
-    - name: Test basic sandbox
-      run: |
-        output=$(./sandbox -- echo "hello from sandbox")
-        echo "Output: $output"
-        test "$output" = "hello from sandbox"
+      - name: Run Linux seccomp tests
+        run: ./tests/test_seccomp.sh
 
-    - name: Compile TIOCSTI test program
-      run: |
-        cat > /tmp/test_tiocsti.c << 'EOF'
-        #include <sys/ioctl.h>
-        #include <stdio.h>
-        #include <errno.h>
-        #include <string.h>
-        #define TIOCSTI 0x5412
-        int main() {
-            char c = 'X';
-            if (ioctl(0, TIOCSTI, &c) < 0) {
-                if (errno == EPERM) { printf("blocked\n"); return 0; }
-                printf("error: %s\n", strerror(errno)); return 2;
-            }
-            printf("allowed\n"); return 1;
-        }
-        EOF
-        gcc -o /tmp/test_tiocsti /tmp/test_tiocsti.c
+  test-macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-13
+            arch: x86_64
+          - runner: macos-14
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
 
-    - name: Test TIOCSTI blocked inside sandbox
-      run: |
-        result=$(./sandbox -w /tmp -- /tmp/test_tiocsti)
-        echo "Result: $result"
-        test "$result" = "blocked"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Compile TIOCLINUX test program
-      run: |
-        cat > /tmp/test_tioclinux.c << 'EOF'
-        #include <sys/ioctl.h>
-        #include <stdio.h>
-        #include <errno.h>
-        #include <string.h>
-        #define TIOCLINUX 0x541c
-        int main() {
-            char arg[2] = {2, 0};
-            if (ioctl(0, TIOCLINUX, arg) < 0) {
-                if (errno == EPERM) { printf("blocked\n"); return 0; }
-                printf("error: %s\n", strerror(errno)); return 2;
-            }
-            printf("allowed\n"); return 1;
-        }
-        EOF
-        gcc -o /tmp/test_tioclinux /tmp/test_tioclinux.c
+      - name: Verify architecture
+        run: |
+          echo "Expected: ${{ matrix.arch }}"
+          echo "Actual: $(uname -m)"
+          test "$(uname -m)" = "${{ matrix.arch }}"
 
-    - name: Test TIOCLINUX blocked inside sandbox
-      run: |
-        result=$(./sandbox -w /tmp -- /tmp/test_tioclinux)
-        echo "Result: $result"
-        test "$result" = "blocked"
-
-    - name: Test file operations in sandbox
-      run: |
-        ./sandbox -w /tmp -- sh -c 'echo "test content" > /tmp/test_file'
-        content=$(./sandbox -w /tmp -- cat /tmp/test_file)
-        test "$content" = "test content"
-        rm -f /tmp/test_file
+      - name: Run cross-platform sandbox tests
+        run: ./tests/test_sandbox.sh
