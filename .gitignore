@@ -1,7 +1,14 @@
 # Development logs and private notes
 claude.local.md
+CLAUDE.md
 PROJECT_LOG.md
 devlog/
+
+# Local workspace directories
+projects/
+shell-snapshots/
+statsig/
+todos/
 
 # Credential staging area
 .claudito_creds/
