@@ -221,6 +221,7 @@ cco --deny-path ~/Downloads
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
 - `--deny-path PATH`: Hide a path entirely so it becomes inaccessible to Claude (appears empty/unavailable).
 
+### Sandbox Backend Passthrough (`--`)
 ## Command Pass-through
 
 `cco` acts as a wrapper - any options it doesn't recognize get passed directly to Claude Code:
