@@ -864,7 +864,17 @@ run_native_sandbox() {
 	if [[ "$allow_keychain" = true ]]; then
 		cmd+=("--allow-keychain")
 	fi
-	cmd+=("${sandbox_rules[@]}" "--")
+	cmd+=("${sandbox_rules[@]}")
+	
+	# Add separator and any extra backend args (from -- or CCO_SANDBOX_ARGS_FILE)
+	# Format: sandbox [opts] -- [backend-args...] -- <command>
+	# The sandbox script collects everything between the two -- markers as backend args
+	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
+		cmd+=("--" "${sandbox_extra_args[@]}" "--")
+		log "Adding ${#sandbox_extra_args[@]} extra sandbox backend args"
+	else
+		cmd+=("--")
+	fi
 	
 	# Debug: Show the full sandbox command being executed
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
@@ -1220,6 +1230,12 @@ run_container() {
 	[[ -f "$HOME/.gitconfig" ]] && docker_args+=(-v "$HOME/.gitconfig":"$container_home/.gitconfig:ro")
 	[[ -d "$HOME/.ssh" ]] && docker_args+=(-v "$HOME/.ssh":"$container_home/.ssh:ro")
 
+	# Add any extra sandbox args (from -- or CCO_SANDBOX_ARGS_FILE)
+	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
+		log "Adding ${#sandbox_extra_args[@]} extra sandbox args"
+		docker_args+=("${sandbox_extra_args[@]}")
+	fi
+
 	# Function to start background SIGWINCH monitor
 	start_sigwinch_monitor() {
 		local container_name="$1"
@@ -1415,6 +1431,7 @@ additional_ro_paths=()
 deny_paths=()
 custom_env_vars=()
 custom_packages=()
+sandbox_extra_args=()
 docker_access=false
 allow_oauth_refresh=false
 allow_keychain=false
@@ -1425,6 +1442,20 @@ shell_mode=false
 safe_mode=false
 claude_command_flag=""
 command_flag=""
+
+# Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
+if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
+	if [[ -f "$CCO_SANDBOX_ARGS_FILE" ]]; then
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			# Skip empty lines and comments
+			[[ -z "$line" || "$line" == \#* ]] && continue
+			sandbox_extra_args+=("$line")
+		done < "$CCO_SANDBOX_ARGS_FILE"
+		log "Loaded ${#sandbox_extra_args[@]} sandbox args from $CCO_SANDBOX_ARGS_FILE"
+	else
+		warn "CCO_SANDBOX_ARGS_FILE set but file not found: $CCO_SANDBOX_ARGS_FILE"
+	fi
+fi
 
 # First pass: Extract cco-specific flags and collect remaining args
 # This ensures --add-dir and other cco flags are parsed before subcommands
@@ -1581,6 +1612,12 @@ while [[ $# -gt 0 ]]; do
 				done
 			fi
 			;;
+	--)
+		# Everything after -- goes to the sandbox backend (docker/bwrap/sandbox-exec)
+		shift
+		sandbox_extra_args+=("$@")
+		break
+		;;
 	*)
 		# Not a cco flag, keep for subcommand/Claude processing
 		remaining_args+=("$1")
@@ -1752,6 +1789,18 @@ if [[ $# -gt 0 ]]; then
 		echo "                      Hide paths from the sandbox (appear empty/unavailable)"
 		echo "  --help, -h          Show this help message"
 		echo ""
+		echo "Sandbox Passthrough (-- args):"
+		echo "  Arguments after -- are passed directly to the sandbox backend:"
+		echo "    - Docker mode:  passed to 'docker run' (e.g., -p, --network, --cap-add)"
+		echo "    - Linux native: passed to 'bwrap'"
+		echo "    - macOS native: passed to 'sandbox-exec'"
+		echo ""
+		echo "  Examples:"
+		echo "    cco -- -p 3000:3000                    # Forward port 3000"
+		echo "    cco -- -p 3000:3000 -p 8080:8080       # Forward multiple ports"
+		echo "    cco -- --network host                  # Use host networking"
+		echo "    cco -- -e \"MESSAGE=hello world\"        # Set env with spaces"
+		echo ""
 		echo "Claude Code Options (passed through):"
 		echo "  --add-dir <paths...>        Additional directories to allow tool access to"
 		echo "                             Suffix with :ro or :rw (default) for permissions"
@@ -1772,10 +1821,22 @@ if [[ $# -gt 0 ]]; then
 		echo "  - Automatically loads .env file if present"
 		echo "  - Passes through ANTHROPIC_API_KEY, proxy settings, git config, etc."
 		echo "  - Use --env to set custom variables"
-	echo "  - CCO_CLAUDE_COMMAND  Alternative Claude command to use (e.g., 'ccr code')"
-	echo "                      Overridden by --claude-command flag if both are set"
-	echo "  - CCO_COMMAND       Arbitrary command to run instead of Claude Code"
-	echo "                      Overridden by --command flag if both are set"
+		echo "  - CCO_CLAUDE_COMMAND    Alternative Claude command to use (e.g., 'ccr code')"
+		echo "                          Overridden by --claude-command flag if both are set"
+		echo "  - CCO_COMMAND           Arbitrary command to run instead of Claude Code"
+		echo "                          Overridden by --command flag if both are set"
+		echo "  - CCO_SANDBOX_ARGS_FILE Path to file containing extra sandbox args (one per line)"
+		echo "                          Use this for persistent sandbox configuration"
+		echo ""
+		echo "Sandbox Args File Format (CCO_SANDBOX_ARGS_FILE):"
+		echo "  One argument per line. Lines starting with # are comments."
+		echo "  Example ~/.config/cco/sandbox-args:"
+		echo "    # Forward dev server port"
+		echo "    -p"
+		echo "    3000:3000"
+		echo "    # Forward database port"
+		echo "    -p"
+		echo "    5432:5432"
 		echo ""
 		echo "Requirements:"
 		echo "  - Sandbox backend: ONE of the following:"
