@@ -49,27 +49,27 @@ error() {
 # Detect available sandbox backends
 detect_sandbox_backend() {
 	local force_backend="$1"
-	
+
 	if [[ -n "$force_backend" ]]; then
 		case "$force_backend" in
-			native|docker)
-				SANDBOX_BACKEND="$force_backend"
-				return
-				;;
-			auto|"")
-				# Continue with auto-detection
-				;;
-			*)
-				error "Invalid sandbox backend: $force_backend"
-				error "Valid options: auto, native, docker"
-				exit 1
-				;;
+		native | docker)
+			SANDBOX_BACKEND="$force_backend"
+			return
+			;;
+		auto | "")
+			# Continue with auto-detection
+			;;
+		*)
+			error "Invalid sandbox backend: $force_backend"
+			error "Valid options: auto, native, docker"
+			exit 1
+			;;
 		esac
 	fi
-	
+
 	# Auto-detect best available backend
 	local os="$(uname -s)"
-	
+
 	if [[ "$os" == "Darwin" ]]; then
 		# macOS: Check for sandbox-exec (Seatbelt)
 		if command -v sandbox-exec &>/dev/null; then
@@ -185,8 +185,8 @@ add_rw_path() {
 		warn "Directory does not exist: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_ro_paths <<< "$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
-	IFS=' ' read -r -a deny_paths <<< "$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
+	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
 	if ! path_in_array "$path" "${additional_dirs[@]}"; then
 		additional_dirs+=("$path")
 	fi
@@ -199,8 +199,8 @@ add_ro_path() {
 		warn "Path does not exist for read-only share: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<< "$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a deny_paths <<< "$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
+	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
 	if ! path_in_array "$path" "${additional_ro_paths[@]}"; then
 		additional_ro_paths+=("$path")
 	fi
@@ -213,8 +213,8 @@ add_deny_path() {
 		warn "Path does not exist for deny rule: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<< "$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a additional_ro_paths <<< "$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
+	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
+	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
 	if ! path_in_array "$path" "${deny_paths[@]}"; then
 		deny_paths+=("$path")
 	fi
@@ -238,16 +238,16 @@ handle_add_dir_entry() {
 	fi
 
 	case "$mode" in
-		rw)
-			add_rw_path "$resolved"
-			;;
-		ro)
-			add_ro_path "$resolved"
-			;;
-		*)
-			error "Unknown mode for --add-dir entry: $mode"
-			exit 1
-			;;
+	rw)
+		add_rw_path "$resolved"
+		;;
+	ro)
+		add_ro_path "$resolved"
+		;;
+	*)
+		error "Unknown mode for --add-dir entry: $mode"
+		exit 1
+		;;
 	esac
 }
 
@@ -319,16 +319,16 @@ find_claude_config_dir() {
 needs_claude_authentication() {
 	# If we're running a custom command (not Claude), skip Claude authentication
 	if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
-		return 1  # Don't need Claude auth
+		return 1 # Don't need Claude auth
 	fi
-	
+
 	# If we're in shell mode, we don't need Claude authentication
 	if [[ "$shell_mode" = true ]]; then
-		return 1  # Don't need Claude auth
+		return 1 # Don't need Claude auth
 	fi
-	
+
 	# Otherwise we need Claude authentication
-	return 0  # Need Claude auth
+	return 0 # Need Claude auth
 }
 
 # Verify Claude Code authentication is available
@@ -782,9 +782,9 @@ run_native_sandbox() {
 	claude_config_dir=$(find_claude_config_dir)
 	local current_dir="$PWD"
 	local project_claude_dir="$current_dir/.claude"
-	
+
 	log "Starting cco with native sandbox..."
-	
+
 	# Check if sandbox script exists
 	local sandbox_script="$CCO_INSTALLATION_DIR/sandbox"
 	if [[ ! -x "$sandbox_script" ]]; then
@@ -795,13 +795,13 @@ run_native_sandbox() {
 		run_container
 		return
 	fi
-	
+
 	# Prepare sandbox access rules
 	local sandbox_rules=()
 
 	# Always allow writes to current project directory
 	sandbox_rules+=("--write" "$current_dir")
-	
+
 	# Add any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -809,7 +809,7 @@ run_native_sandbox() {
 			log "Adding additional directory: $dir"
 		fi
 	done
-	
+
 	# Allow read-write access to the entire ~/.claude directory
 	# This is needed for state files, MCP configs, session data, etc.
 	# Even if config is in ~/.config/claude, Claude may need to write to ~/.claude
@@ -817,25 +817,25 @@ run_native_sandbox() {
 		mkdir -p "$HOME/.claude"
 	fi
 	sandbox_rules+=("--write" "$HOME/.claude")
-	
+
 	# Also allow the detected config directory if it's different from ~/.claude
 	if [[ "$claude_config_dir" != "$HOME/.claude" ]]; then
 		sandbox_rules+=("--write" "$claude_config_dir")
 	fi
-	
+
 	# Allow access to main .claude.json file (Claude needs to write to this)
 	# This is a specific file in the home directory, NOT inside ~/.claude/
 	# Create it if it doesn't exist so the sandbox can whitelist it
 	if [[ ! -f "$HOME/.claude.json" ]]; then
-		echo "{}" > "$HOME/.claude.json"
+		echo "{}" >"$HOME/.claude.json"
 	fi
 	sandbox_rules+=("--write" "$HOME/.claude.json")
-	
+
 	# Allow writes to project-specific .claude directory
 	if [[ -d "$project_claude_dir" ]]; then
 		sandbox_rules+=("--write" "$project_claude_dir")
 	fi
-	
+
 	# Allow writes to temp directory for credential syncing
 	sandbox_rules+=("--write" "/tmp")
 
@@ -849,13 +849,13 @@ run_native_sandbox() {
 		sandbox_rules+=("--deny" "$blocked_path")
 		log "Denying path inside sandbox: $blocked_path"
 	done
-	
+
 	# On macOS, Claude needs to access the Keychain directly
 	# The sandbox-exec Seatbelt profile already allows default system operations
 	# including Keychain access, so we don't need to pre-extract credentials
-	
+
 	# On Linux with bubblewrap, credentials are in files so no special handling needed
-	
+
 	# Build the command
 	local cmd=("$sandbox_script")
 	if [[ "$safe_mode" = true ]]; then
@@ -865,7 +865,7 @@ run_native_sandbox() {
 		cmd+=("--allow-keychain")
 	fi
 	cmd+=("${sandbox_rules[@]}")
-	
+
 	# Add separator and any extra backend args (from -- or CCO_SANDBOX_ARGS_FILE)
 	# Format: sandbox [opts] -- [backend-args...] -- <command>
 	# The sandbox script collects everything between the two -- markers as backend args
@@ -875,7 +875,7 @@ run_native_sandbox() {
 	else
 		cmd+=("--")
 	fi
-	
+
 	# Debug: Show the full sandbox command being executed
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
 		log "DEBUG: Sandbox command: ${cmd[@]}"
@@ -884,12 +884,12 @@ run_native_sandbox() {
 			log "  $wp"
 		done
 	fi
-	
+
 	# Get command to use and split into array
 	local cmd_str
 	cmd_str=$(get_command)
 	# Split command string into array (handles multi-word commands)
-	read -ra cmd_array <<< "$cmd_str"
+	read -ra cmd_array <<<"$cmd_str"
 
 	# Add command
 	if [[ "$shell_mode" = true ]]; then
@@ -918,7 +918,7 @@ run_native_sandbox() {
 			fi
 		fi
 	fi
-	
+
 	# Execute in sandbox with full environment
 	exec "${cmd[@]}"
 }
@@ -952,7 +952,7 @@ run_container() {
 		-v "$current_dir":"$current_dir"
 		-w "$current_dir"
 	)
-	
+
 	# Mount any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -1158,7 +1158,7 @@ run_container() {
 	fi
 	log "Mounting ~/.claude directory: $HOME/.claude → $container_home/.claude"
 	docker_args+=(-v "$HOME/.claude":"$container_home/.claude")
-	
+
 	# If the detected config directory is different from ~/.claude, mount it too
 	if [[ "$host_system_claude_dir" != "$HOME/.claude" ]]; then
 		log "Also mounting config directory: $host_system_claude_dir → $container_home/.config/claude"
@@ -1215,7 +1215,7 @@ run_container() {
 	# Mount main .claude.json from home directory (this is separate from .claude/)
 	# Create it if it doesn't exist to ensure Claude can write to it
 	if [[ ! -f "$HOME/.claude.json" ]]; then
-		echo "{}" > "$HOME/.claude.json"
+		echo "{}" >"$HOME/.claude.json"
 	fi
 	log "Mounting main .claude.json from home directory"
 	docker_args+=(-v "$HOME/.claude.json":"$container_home/.claude.json")
@@ -1274,7 +1274,7 @@ run_container() {
 			# Get command to use and split into array for Docker run too
 			local cmd_str
 			cmd_str=$(get_command)
-			read -ra cmd_array <<< "$cmd_str"
+			read -ra cmd_array <<<"$cmd_str"
 
 			# Check if we're running a custom command (CCO_COMMAND or --command)
 			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
@@ -1450,7 +1450,7 @@ if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
 			# Skip empty lines and comments
 			[[ -z "$line" || "$line" == \#* ]] && continue
 			sandbox_extra_args+=("$line")
-		done < "$CCO_SANDBOX_ARGS_FILE"
+		done <"$CCO_SANDBOX_ARGS_FILE"
 		log "Loaded ${#sandbox_extra_args[@]} sandbox args from $CCO_SANDBOX_ARGS_FILE"
 	else
 		warn "CCO_SANDBOX_ARGS_FILE set but file not found: $CCO_SANDBOX_ARGS_FILE"
@@ -1600,18 +1600,18 @@ while [[ $# -gt 0 ]]; do
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
 				# Stop if we hit a known subcommand
 				case "$1" in
-					shell|codex|droid|opencode|self-update|cleanup|info|backup-creds|restore-creds|pull|rebuild)
-						# This is a subcommand, not a directory
-						break
-						;;
-					*)
-						handle_add_dir_entry "$1"
-						shift
-						;;
-					esac
-				done
-			fi
-			;;
+				shell | codex | droid | opencode | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+					# This is a subcommand, not a directory
+					break
+					;;
+				*)
+					handle_add_dir_entry "$1"
+					shift
+					;;
+				esac
+			done
+		fi
+		;;
 	--)
 		# Everything after -- goes to the sandbox backend (docker/bwrap/sandbox-exec)
 		shift
@@ -1871,7 +1871,7 @@ main() {
 			safe_mode=false
 		fi
 	fi
-	
+
 	# Only verify Claude authentication if we need it
 	if needs_claude_authentication; then
 		verify_claude_authentication
@@ -1888,7 +1888,6 @@ main() {
 				warn "Failed to pull pre-built image, using existing or building locally"
 			fi
 		fi
-
 
 		# Determine whether to pull pre-built image or build locally
 		if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
