@@ -1,8 +1,7 @@
 .PHONY: help test-install clean format lint
 
-SHELL_FILES = cco sandbox install.sh docker-entrypoint.sh \
-              tests/run_linux_tests.sh tests/test_sandbox.sh \
-              tests/test_seatbelt_precedence.sh tests/test_seccomp.sh
+# Auto-discover tracked shell scripts (intersection of shfmt -f and git ls-files)
+SHELL_FILES := $(shell shfmt -f . | while read -r f; do git ls-files --error-unmatch "$$f" >/dev/null 2>&1 && echo "$$f"; done)
 
 # Default target
 help:
