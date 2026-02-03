@@ -294,21 +294,21 @@ main() {
 
 # Handle command line arguments
 case "${1:-}" in
-	--help | -h)
-		echo "cco installer - a thin protective layer for Claude Code"
-		echo ""
-		echo "Usage: curl -fsSL https://raw.githubusercontent.com/nikvdp/cco/master/install.sh | bash"
-		echo ""
-		echo "This script will:"
-		echo "  • Clone cco to ~/.local/share/cco"
-		echo "  • Create symlink in ~/bin (if in PATH) or /usr/local/bin"
-		echo "  • Enable global cco usage from any directory"
-		echo ""
-		echo "Options:"
-		echo "  --help, -h    Show this help message"
-		exit 0
-		;;
-	*)
-		main
-		;;
+--help | -h)
+	echo "cco installer - a thin protective layer for Claude Code"
+	echo ""
+	echo "Usage: curl -fsSL https://raw.githubusercontent.com/nikvdp/cco/master/install.sh | bash"
+	echo ""
+	echo "This script will:"
+	echo "  • Clone cco to ~/.local/share/cco"
+	echo "  • Create symlink in ~/bin (if in PATH) or /usr/local/bin"
+	echo "  • Enable global cco usage from any directory"
+	echo ""
+	echo "Options:"
+	echo "  --help, -h    Show this help message"
+	exit 0
+	;;
+*)
+	main
+	;;
 esac
