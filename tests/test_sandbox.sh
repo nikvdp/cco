@@ -50,15 +50,16 @@ else
 fi
 
 echo "Test: Exit code preserved"
-if ./sandbox -- sh -c 'exit 42'; then
-	fail "Exit code preserved: expected 42, got 0"
-elif [[ $? -eq 42 ]]; then
+exit_code=0
+./sandbox -- sh -c 'exit 42' || exit_code=$?
+if [[ $exit_code -eq 42 ]]; then
 	pass "Exit code preserved"
 else
-	fail "Exit code preserved: expected 42, got $?"
+	fail "Exit code preserved: expected 42, got $exit_code"
 fi
 
 echo "Test: Environment variables inherited"
+# shellcheck disable=SC2016  # Intentional: $TEST_VAR should expand in the subshell, not here
 if output=$(TEST_VAR="test_value" ./sandbox -- sh -c 'echo $TEST_VAR' 2>&1) && [[ "$output" == "test_value" ]]; then
 	pass "Environment variables inherited"
 else
