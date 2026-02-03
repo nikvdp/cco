@@ -43,7 +43,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 echo "--- Basic Execution ---"
 
 echo "Test: Basic command execution"
-if output=$(./sandbox -- echo "hello sandbox" 2>&1) && [[ "$output" == "hello sandbox" ]]; then
+if output=$(./sandbox echo "hello sandbox" 2>&1) && [[ "$output" == "hello sandbox" ]]; then
 	pass "Basic command execution"
 else
 	fail "Basic command execution: got '$output'"
@@ -51,7 +51,7 @@ fi
 
 echo "Test: Exit code preserved"
 exit_code=0
-./sandbox -- sh -c 'exit 42' || exit_code=$?
+./sandbox sh -c 'exit 42' || exit_code=$?
 if [[ $exit_code -eq 42 ]]; then
 	pass "Exit code preserved"
 else
@@ -60,7 +60,7 @@ fi
 
 echo "Test: Environment variables inherited"
 # shellcheck disable=SC2016  # Intentional: $TEST_VAR should expand in the subshell, not here
-if output=$(TEST_VAR="test_value" ./sandbox -- sh -c 'echo $TEST_VAR' 2>&1) && [[ "$output" == "test_value" ]]; then
+if output=$(TEST_VAR="test_value" ./sandbox sh -c 'echo $TEST_VAR' 2>&1) && [[ "$output" == "test_value" ]]; then
 	pass "Environment variables inherited"
 else
 	fail "Environment variables inherited: got '$output'"
@@ -75,7 +75,7 @@ echo "--- Write Restrictions ---"
 
 echo "Test: Current directory is writable"
 test_file="$PWD/test_write_$$"
-if ./sandbox -- sh -c "echo test > '$test_file'" 2>/dev/null && [[ -f "$test_file" ]]; then
+if ./sandbox sh -c "echo test > '$test_file'" 2>/dev/null && [[ -f "$test_file" ]]; then
 	rm -f "$test_file"
 	pass "Current directory is writable"
 else
@@ -84,7 +84,7 @@ else
 fi
 
 echo "Test: /tmp is writable"
-if ./sandbox -- sh -c 'echo test > /tmp/sandbox_test_$$ && rm /tmp/sandbox_test_$$' 2>/dev/null; then
+if ./sandbox sh -c 'echo test > /tmp/sandbox_test_$$ && rm /tmp/sandbox_test_$$' 2>/dev/null; then
 	pass "/tmp is writable"
 else
 	fail "/tmp is writable"
@@ -92,7 +92,7 @@ fi
 
 echo "Test: System directories not writable"
 # Try to write to /usr which should be denied
-if ./sandbox -- sh -c 'echo test > /usr/sandbox_test_file' 2>/dev/null; then
+if ./sandbox sh -c 'echo test > /usr/sandbox_test_file' 2>/dev/null; then
 	fail "System directories not writable: /usr was writable"
 	rm -f /usr/sandbox_test_file 2>/dev/null || true
 else
@@ -108,7 +108,7 @@ echo "--- Write Path Tests ---"
 
 echo "Test: -w flag allows writes to specified directory"
 mkdir -p "$TEST_DIR/write_test"
-if ./sandbox -w "$TEST_DIR/write_test" -- sh -c "echo test > '$TEST_DIR/write_test/file'" 2>/dev/null; then
+if ./sandbox -w "$TEST_DIR/write_test" sh -c "echo test > '$TEST_DIR/write_test/file'" 2>/dev/null; then
 	if [[ -f "$TEST_DIR/write_test/file" ]]; then
 		pass "-w flag allows writes to specified directory"
 	else
@@ -120,7 +120,7 @@ fi
 
 echo "Test: -w flag allows writes to specified file"
 touch "$TEST_DIR/write_file"
-if ./sandbox -w "$TEST_DIR/write_file" -- sh -c "echo test > '$TEST_DIR/write_file'" 2>/dev/null; then
+if ./sandbox -w "$TEST_DIR/write_file" sh -c "echo test > '$TEST_DIR/write_file'" 2>/dev/null; then
 	if [[ "$(cat "$TEST_DIR/write_file")" == "test" ]]; then
 		pass "-w flag allows writes to specified file"
 	else
@@ -140,7 +140,7 @@ echo "--- Read-Only Path Tests ---"
 echo "Test: --read-only allows reads"
 mkdir -p "$TEST_DIR/ro_test"
 echo "readonly_content" >"$TEST_DIR/ro_test/file"
-if output=$(./sandbox --read-only "$TEST_DIR/ro_test" -- cat "$TEST_DIR/ro_test/file" 2>&1) && [[ "$output" == "readonly_content" ]]; then
+if output=$(./sandbox --read-only "$TEST_DIR/ro_test" cat "$TEST_DIR/ro_test/file" 2>&1) && [[ "$output" == "readonly_content" ]]; then
 	pass "--read-only allows reads"
 else
 	fail "--read-only allows reads: got '$output'"
@@ -152,7 +152,7 @@ echo "Test: --read-only blocks writes"
 RO_TEST_DIR="$HOME/.sandbox_ro_test_$$"
 mkdir -p "$RO_TEST_DIR"
 echo "original" >"$RO_TEST_DIR/file"
-if ./sandbox --read-only "$RO_TEST_DIR" -- sh -c "echo modified > '$RO_TEST_DIR/file'" 2>/dev/null; then
+if ./sandbox --read-only "$RO_TEST_DIR" sh -c "echo modified > '$RO_TEST_DIR/file'" 2>/dev/null; then
 	# Check if file was actually modified (some systems may silently fail)
 	if [[ "$(cat "$RO_TEST_DIR/file")" == "original" ]]; then
 		rm -rf "$RO_TEST_DIR"
@@ -176,7 +176,7 @@ echo "--- Deny Path Tests ---"
 echo "Test: --deny blocks reads to directory"
 mkdir -p "$TEST_DIR/deny_test"
 echo "secret" >"$TEST_DIR/deny_test/file"
-if ./sandbox --deny "$TEST_DIR/deny_test" -- cat "$TEST_DIR/deny_test/file" 2>/dev/null; then
+if ./sandbox --deny "$TEST_DIR/deny_test" cat "$TEST_DIR/deny_test/file" 2>/dev/null; then
 	fail "--deny blocks reads: file was readable"
 else
 	pass "--deny blocks reads to directory"
@@ -184,7 +184,7 @@ fi
 
 echo "Test: --deny blocks reads to file"
 echo "secret" >"$TEST_DIR/deny_file"
-if ./sandbox --deny "$TEST_DIR/deny_file" -- cat "$TEST_DIR/deny_file" 2>/dev/null; then
+if ./sandbox --deny "$TEST_DIR/deny_file" cat "$TEST_DIR/deny_file" 2>/dev/null; then
 	fail "--deny blocks reads to file: file was readable"
 else
 	pass "--deny blocks reads to file"
@@ -193,7 +193,7 @@ fi
 echo "Test: --deny blocks listing directory"
 mkdir -p "$TEST_DIR/deny_ls"
 touch "$TEST_DIR/deny_ls/file1" "$TEST_DIR/deny_ls/file2"
-if output=$(./sandbox --deny "$TEST_DIR/deny_ls" -- ls "$TEST_DIR/deny_ls" 2>/dev/null) && [[ -n "$output" ]]; then
+if output=$(./sandbox --deny "$TEST_DIR/deny_ls" ls "$TEST_DIR/deny_ls" 2>/dev/null) && [[ -n "$output" ]]; then
 	fail "--deny blocks listing: got '$output'"
 else
 	pass "--deny blocks listing directory"
@@ -214,21 +214,28 @@ echo "child_content" >"$AID_TEST_DIR/parent/child/file.txt"
 echo "sibling_content" >"$AID_TEST_DIR/parent/sibling.txt"
 
 echo "Test: --read-only inside --deny allows reads to child"
-if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "child_content" ]]; then
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "child_content" ]]; then
 	pass "--read-only inside --deny allows reads to child"
 else
 	fail "--read-only inside --deny: could not read child, got '$output'"
 fi
 
+echo "Test: --read-only file inside --deny allows reads to file"
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child/file.txt" cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "child_content" ]]; then
+	pass "--read-only file inside --deny allows reads to file"
+else
+	fail "--read-only file inside --deny: could not read file, got '$output'"
+fi
+
 echo "Test: --read-only inside --deny still blocks sibling"
-if ./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/sibling.txt" 2>/dev/null; then
+if ./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" cat "$AID_TEST_DIR/parent/sibling.txt" 2>/dev/null; then
 	fail "--read-only inside --deny: sibling was readable"
 else
 	pass "--read-only inside --deny still blocks sibling"
 fi
 
 echo "Test: --read-only inside --deny blocks listing parent"
-if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" -- ls "$AID_TEST_DIR/parent" 2>/dev/null) && [[ -n "$output" ]]; then
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" --read-only "$AID_TEST_DIR/parent/child" ls "$AID_TEST_DIR/parent" 2>/dev/null) && [[ -n "$output" ]]; then
 	fail "--read-only inside --deny: parent was listable: '$output'"
 else
 	pass "--read-only inside --deny blocks listing parent"
@@ -236,7 +243,7 @@ fi
 
 echo "Test: -w inside --deny allows writes to child"
 echo "original" >"$AID_TEST_DIR/parent/child/file.txt"
-if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- sh -c "echo modified > '$AID_TEST_DIR/parent/child/file.txt'" 2>/dev/null; then
+if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" sh -c "echo modified > '$AID_TEST_DIR/parent/child/file.txt'" 2>/dev/null; then
 	if [[ "$(cat "$AID_TEST_DIR/parent/child/file.txt")" == "modified" ]]; then
 		pass "-w inside --deny allows writes to child"
 	else
@@ -247,14 +254,14 @@ else
 fi
 
 echo "Test: -w inside --deny allows reads to child"
-if output=$(./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "modified" ]]; then
+if output=$(./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" cat "$AID_TEST_DIR/parent/child/file.txt" 2>/dev/null) && [[ "$output" == "modified" ]]; then
 	pass "-w inside --deny allows reads to child"
 else
 	fail "-w inside --deny: could not read child, got '$output'"
 fi
 
 echo "Test: -w inside --deny blocks writes to parent"
-if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" -- sh -c "echo bad > '$AID_TEST_DIR/parent/badfile.txt'" 2>/dev/null; then
+if ./sandbox --deny "$AID_TEST_DIR/parent" -w "$AID_TEST_DIR/parent/child" sh -c "echo bad > '$AID_TEST_DIR/parent/badfile.txt'" 2>/dev/null; then
 	fail "-w inside --deny: parent was writable"
 	rm -f "$AID_TEST_DIR/parent/badfile.txt"
 else
@@ -275,7 +282,7 @@ echo "Test: --safe hides home directory contents"
 # Create a test file in home
 test_home_file="$HOME/.sandbox_test_$$"
 echo "home_content" >"$test_home_file"
-if ./sandbox --safe -- cat "$test_home_file" 2>/dev/null; then
+if ./sandbox --safe cat "$test_home_file" 2>/dev/null; then
 	rm -f "$test_home_file"
 	fail "--safe hides home directory: file was readable"
 else
@@ -284,7 +291,7 @@ else
 fi
 
 echo "Test: --safe still allows current directory access"
-if output=$(./sandbox --safe -- pwd 2>&1) && [[ "$output" == "$PWD" ]]; then
+if output=$(./sandbox --safe pwd 2>&1) && [[ "$output" == "$PWD" ]]; then
 	pass "--safe still allows current directory access"
 else
 	fail "--safe still allows current directory: got '$output'"
