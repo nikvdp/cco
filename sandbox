@@ -7,9 +7,11 @@
 set -euo pipefail
 
 usage() {
-	echo "Usage: sandbox [--safe] [--allow-keychain] [-w|--write PATH] [--read-only PATH] [--deny PATH]... <command> [args...]"
+	echo "Usage: sandbox [--safe] [--allow-keychain] [-w|--write PATH] [--read-only PATH] [--deny PATH]... [-- [BACKEND_ARGS...] --] <command> [args...]"
 	echo "  PATH may be a directory (RW under it) or a file (RW to that file only)."
 	echo "  --allow-keychain: Allow access to macOS Keychain (DANGEROUS - grants read/write access to ALL Keychain entries)"
+	echo "  BACKEND_ARGS: Extra arguments passed directly to bwrap (Linux) or sandbox-exec (macOS)"
+	echo "                Must be enclosed between -- markers if provided"
 	exit 1
 }
 
@@ -51,6 +53,7 @@ policy_quote() {
 write_paths=()
 ro_paths=()
 deny_paths=()
+backend_extra_args=()
 safe_mode=false
 allow_keychain=false
 while [[ $# -gt 0 ]]; do
@@ -84,6 +87,15 @@ while [[ $# -gt 0 ]]; do
 	-h | --help) usage ;;
 	--)
 		shift
+		# Collect backend args until we hit another -- or end of args
+		while [[ $# -gt 0 && "$1" != "--" ]]; do
+			backend_extra_args+=("$1")
+			shift
+		done
+		# If we hit another --, skip it (it separates backend args from command)
+		if [[ "${1:-}" == "--" ]]; then
+			shift
+		fi
 		break
 		;;
 	-*)
@@ -226,7 +238,7 @@ run_linux() {
 		elif [[ -f "$ap" ]]; then
 			empty_file=$(mktemp)
 			cleanup_paths+=("$empty_file")
-		: >"$empty_file"
+			: >"$empty_file"
 			args+=(--ro-bind "$empty_file" "$ap")
 		else
 			empty_dir=$(mktemp -d)
@@ -235,6 +247,11 @@ run_linux() {
 		fi
 	done
 	args+=(--chdir "$PWD_ABS")
+
+	# Add any extra backend args
+	if [[ ${#backend_extra_args[@]} -gt 0 ]]; then
+		args+=("${backend_extra_args[@]}")
+	fi
 
 	# Execute bwrap with seccomp filter on fd 200 if available
 	if [[ -n "$seccomp_filter" && -f "$seccomp_filter" ]]; then
@@ -269,7 +286,7 @@ run_macos() {
 	# - Any -w directories (subpath)
 	# - Any -w files (literal)
 	policy_file="$(mktemp -t sandbox.seatbelt.XXXXXX)"
-	
+
 	keep_policy=false
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
 		echo "DEBUG: Seatbelt policy file: $policy_file" >&2
@@ -284,22 +301,22 @@ run_macos() {
 	{
 		echo "(version 1)"
 		echo "(allow default)"
-		
+
 		# Deny ALL file writes first
 		echo "(deny file-write*)"
-		
+
 		# Optional safe mode: deny reads under $HOME by default, re-allow below
 		if [[ "$safe_mode" == true ]]; then
 			printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$HOME")"
 		fi
-		
+
 		# Then allow only specific paths we need
 		# 1. Current working directory
 		printf '(allow file-write* (subpath "%s"))\n' "$(policy_quote "$PWD_ABS")"
 		if [[ "$safe_mode" == true ]]; then
 			printf '(allow file-read* (subpath "%s"))\n' "$(policy_quote "$PWD_ABS")"
 		fi
-		
+
 		# 2. Additional paths passed via -w flags
 		for ap in "${write_paths[@]+"${write_paths[@]}"}"; do
 			if [[ -d "$ap" ]]; then
@@ -334,14 +351,14 @@ run_macos() {
 				printf '(deny file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
 			fi
 		done
-		
+
 		# 3. Temp directories (needed for Keychain and other operations)
 		echo "(allow file-write* (subpath \"/tmp\"))"
 		echo "(allow file-write* (subpath \"/var/tmp\"))"
 		echo "(allow file-write* (subpath \"/var/folders\"))"
 		echo "(allow file-write* (subpath \"/private/var/folders\"))"
 		echo "(allow file-write* (subpath \"/private/tmp\"))"
-		
+
 		# 4. Common device files and pipes
 		echo "(allow file-write* (literal \"/dev/null\"))"
 		echo "(allow file-write* (literal \"/dev/zero\"))"
@@ -352,7 +369,7 @@ run_macos() {
 		echo "(allow file-write* (literal \"/dev/stdout\"))"
 		echo "(allow file-write* (literal \"/dev/stderr\"))"
 		echo "(allow file-write* (literal \"/dev/fd\"))"
-		
+
 		# 5. User's Library folders that apps commonly need
 		printf '(allow file-write* (subpath "%s/Library/Caches"))\n' "$(policy_quote "$HOME")"
 		printf '(allow file-write* (subpath "%s/Library/Logs"))\n' "$(policy_quote "$HOME")"
@@ -364,19 +381,25 @@ run_macos() {
 			printf '(allow file-read* (subpath "/Library/Keychains"))\n'
 			printf '(allow file-write* (subpath "%s/Library/Keychains"))\n' "$(policy_quote "$HOME")"
 			# Security framework and keychain services
-			echo "(allow system-mac-syscall (syscall-number 73))"  # keychain access
+			echo "(allow system-mac-syscall (syscall-number 73))" # keychain access
 			echo "(allow mach-lookup (global-name \"com.apple.securityd\"))"
 			echo "(allow mach-lookup (global-name \"com.apple.security.othersigning\"))"
 			echo "(allow mach-lookup (global-name \"com.apple.security.credentialstore\"))"
 		fi
 	} >"$policy_file"
 
-sandbox-exec -f "$policy_file" "$@"
-local status=$?
-if [[ "$keep_policy" == false ]]; then
-	rm -f "$policy_file"
-fi
-exit $status
+	# Note: sandbox-exec has limited options (-f, -n, -p, -D)
+	# backend_extra_args can include things like -D for defining variables
+	if [[ ${#backend_extra_args[@]} -gt 0 ]]; then
+		sandbox-exec -f "$policy_file" "${backend_extra_args[@]}" "$@"
+	else
+		sandbox-exec -f "$policy_file" "$@"
+	fi
+	local status=$?
+	if [[ "$keep_policy" == false ]]; then
+		rm -f "$policy_file"
+	fi
+	exit $status
 }
 
 case "$OS" in

@@ -202,7 +202,7 @@ You can verify the protection is working:
 
 ⚠️ **The following features are optional and may introduce additional security risks:**
 
-### Host Docker Socket (`--docker`)
+### Host Docker Socket (`--docker-socket`)
 **Purpose**: Mount the host's Docker socket so Claude can build/run containers from inside `cco`.
 
 **Security Implications**:
@@ -265,6 +265,46 @@ You can verify the protection is working:
 - Pre-restore backups created automatically before restoration
 - User confirmation required for automatic restoration from most recent backup
 - Cross-platform support (macOS Keychain + Linux files) with appropriate security handling
+
+### Sandbox Backend Passthrough (`--`)
+**Purpose**: Pass arbitrary arguments directly to the underlying sandbox backend (Docker, bwrap, or sandbox-exec) for advanced configuration like port forwarding.
+
+**Security Implications**:
+- **User-controlled only**: These arguments come from the command line or `CCO_SANDBOX_ARGS_FILE`, not from Claude. Claude cannot inject sandbox arguments.
+- **Potential to weaken isolation**: Users can pass flags that reduce security:
+  - Docker: `--privileged`, `--cap-add`, `-v /:/host`, `--security-opt`, etc.
+  - bwrap: `--bind` to mount additional paths, `--cap-add`, etc.
+  - sandbox-exec: `-D` variables that might affect policy evaluation
+- **File-based config risk**: If an attacker has write access to `CCO_SANDBOX_ARGS_FILE`, they could inject malicious sandbox arguments.
+
+**Examples of dangerous passthrough args**:
+```bash
+# These defeat the sandbox - DON'T DO THIS
+cco -- --privileged                    # Full host access
+cco -- -v /:/hostroot                  # Mount entire host filesystem
+cco -- --cap-add=ALL                   # All capabilities
+cco -- --security-opt=seccomp=unconfined  # Disable seccomp
+```
+
+**Safe usage** (intended use cases):
+```bash
+# Port forwarding for development servers
+cco -- -p 3000:3000
+
+# Custom networking
+cco -- --network=mynetwork
+
+# Environment variables
+cco -- -e DEBUG=1
+```
+
+**Mitigation**:
+- Arguments after `--` require explicit user action; Claude cannot trigger them
+- Document dangerous patterns clearly
+- Users should understand Docker/bwrap/sandbox-exec security before using advanced flags
+- Protect `CCO_SANDBOX_ARGS_FILE` with appropriate filesystem permissions
+
+**Risk Assessment**: **Low** for normal use (port forwarding, env vars). **HIGH** if misused with privileged flags. This feature trusts the user to understand what they're passing to the sandbox backend.
 
 ### Recommendation
 These experimental features are disabled by default. Only enable them if you understand the additional security implications and have implemented appropriate safeguards (regular backups, monitoring, etc.).

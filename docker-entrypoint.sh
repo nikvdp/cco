@@ -57,7 +57,7 @@ if [ -n "$TZ" ]; then
 	# Create timezone symlink if timezone file exists
 	if [ -f "/usr/share/zoneinfo/$TZ" ]; then
 		ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
-		echo "$TZ" > /etc/timezone
+		echo "$TZ" >/etc/timezone
 	else
 		echo "⚠ Warning: Timezone $TZ not found, using system default"
 	fi

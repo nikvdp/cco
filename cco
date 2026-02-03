@@ -49,27 +49,28 @@ error() {
 # Detect available sandbox backends
 detect_sandbox_backend() {
 	local force_backend="$1"
-	
+
 	if [[ -n "$force_backend" ]]; then
 		case "$force_backend" in
-			native|docker)
-				SANDBOX_BACKEND="$force_backend"
-				return
-				;;
-			auto|"")
-				# Continue with auto-detection
-				;;
-			*)
-				error "Invalid sandbox backend: $force_backend"
-				error "Valid options: auto, native, docker"
-				exit 1
-				;;
+		native | docker)
+			SANDBOX_BACKEND="$force_backend"
+			return
+			;;
+		auto | "")
+			# Continue with auto-detection
+			;;
+		*)
+			error "Invalid sandbox backend: $force_backend"
+			error "Valid options: auto, native, docker"
+			exit 1
+			;;
 		esac
 	fi
-	
+
 	# Auto-detect best available backend
-	local os="$(uname -s)"
-	
+	local os
+	os="$(uname -s)"
+
 	if [[ "$os" == "Darwin" ]]; then
 		# macOS: Check for sandbox-exec (Seatbelt)
 		if command -v sandbox-exec &>/dev/null; then
@@ -162,8 +163,9 @@ resolve_path() {
 		return
 	fi
 
-	local dir=$(dirname "$expanded")
-	local base=$(basename "$expanded")
+	local dir base
+	dir=$(dirname "$expanded")
+	base=$(basename "$expanded")
 	if [[ "$dir" == ~* ]]; then
 		dir="${dir/#\~/$HOME}"
 	fi
@@ -185,8 +187,8 @@ add_rw_path() {
 		warn "Directory does not exist: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_ro_paths <<< "$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
-	IFS=' ' read -r -a deny_paths <<< "$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
+	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
 	if ! path_in_array "$path" "${additional_dirs[@]}"; then
 		additional_dirs+=("$path")
 	fi
@@ -199,8 +201,8 @@ add_ro_path() {
 		warn "Path does not exist for read-only share: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<< "$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a deny_paths <<< "$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
+	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
 	if ! path_in_array "$path" "${additional_ro_paths[@]}"; then
 		additional_ro_paths+=("$path")
 	fi
@@ -213,8 +215,8 @@ add_deny_path() {
 		warn "Path does not exist for deny rule: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<< "$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a additional_ro_paths <<< "$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
+	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
+	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
 	if ! path_in_array "$path" "${deny_paths[@]}"; then
 		deny_paths+=("$path")
 	fi
@@ -238,16 +240,16 @@ handle_add_dir_entry() {
 	fi
 
 	case "$mode" in
-		rw)
-			add_rw_path "$resolved"
-			;;
-		ro)
-			add_ro_path "$resolved"
-			;;
-		*)
-			error "Unknown mode for --add-dir entry: $mode"
-			exit 1
-			;;
+	rw)
+		add_rw_path "$resolved"
+		;;
+	ro)
+		add_ro_path "$resolved"
+		;;
+	*)
+		error "Unknown mode for --add-dir entry: $mode"
+		exit 1
+		;;
 	esac
 }
 
@@ -319,16 +321,16 @@ find_claude_config_dir() {
 needs_claude_authentication() {
 	# If we're running a custom command (not Claude), skip Claude authentication
 	if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
-		return 1  # Don't need Claude auth
+		return 1 # Don't need Claude auth
 	fi
-	
+
 	# If we're in shell mode, we don't need Claude authentication
 	if [[ "$shell_mode" = true ]]; then
-		return 1  # Don't need Claude auth
+		return 1 # Don't need Claude auth
 	fi
-	
+
 	# Otherwise we need Claude authentication
-	return 0  # Need Claude auth
+	return 0 # Need Claude auth
 }
 
 # Verify Claude Code authentication is available
@@ -782,9 +784,9 @@ run_native_sandbox() {
 	claude_config_dir=$(find_claude_config_dir)
 	local current_dir="$PWD"
 	local project_claude_dir="$current_dir/.claude"
-	
+
 	log "Starting cco with native sandbox..."
-	
+
 	# Check if sandbox script exists
 	local sandbox_script="$CCO_INSTALLATION_DIR/sandbox"
 	if [[ ! -x "$sandbox_script" ]]; then
@@ -795,13 +797,13 @@ run_native_sandbox() {
 		run_container
 		return
 	fi
-	
+
 	# Prepare sandbox access rules
 	local sandbox_rules=()
 
 	# Always allow writes to current project directory
 	sandbox_rules+=("--write" "$current_dir")
-	
+
 	# Add any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -809,7 +811,7 @@ run_native_sandbox() {
 			log "Adding additional directory: $dir"
 		fi
 	done
-	
+
 	# Allow read-write access to the entire ~/.claude directory
 	# This is needed for state files, MCP configs, session data, etc.
 	# Even if config is in ~/.config/claude, Claude may need to write to ~/.claude
@@ -817,25 +819,25 @@ run_native_sandbox() {
 		mkdir -p "$HOME/.claude"
 	fi
 	sandbox_rules+=("--write" "$HOME/.claude")
-	
+
 	# Also allow the detected config directory if it's different from ~/.claude
 	if [[ "$claude_config_dir" != "$HOME/.claude" ]]; then
 		sandbox_rules+=("--write" "$claude_config_dir")
 	fi
-	
+
 	# Allow access to main .claude.json file (Claude needs to write to this)
 	# This is a specific file in the home directory, NOT inside ~/.claude/
 	# Create it if it doesn't exist so the sandbox can whitelist it
 	if [[ ! -f "$HOME/.claude.json" ]]; then
-		echo "{}" > "$HOME/.claude.json"
+		echo "{}" >"$HOME/.claude.json"
 	fi
 	sandbox_rules+=("--write" "$HOME/.claude.json")
-	
+
 	# Allow writes to project-specific .claude directory
 	if [[ -d "$project_claude_dir" ]]; then
 		sandbox_rules+=("--write" "$project_claude_dir")
 	fi
-	
+
 	# Allow writes to temp directory for credential syncing
 	sandbox_rules+=("--write" "/tmp")
 
@@ -849,13 +851,13 @@ run_native_sandbox() {
 		sandbox_rules+=("--deny" "$blocked_path")
 		log "Denying path inside sandbox: $blocked_path"
 	done
-	
+
 	# On macOS, Claude needs to access the Keychain directly
 	# The sandbox-exec Seatbelt profile already allows default system operations
 	# including Keychain access, so we don't need to pre-extract credentials
-	
+
 	# On Linux with bubblewrap, credentials are in files so no special handling needed
-	
+
 	# Build the command
 	local cmd=("$sandbox_script")
 	if [[ "$safe_mode" = true ]]; then
@@ -864,28 +866,32 @@ run_native_sandbox() {
 	if [[ "$allow_keychain" = true ]]; then
 		cmd+=("--allow-keychain")
 	fi
-	cmd+=("${sandbox_rules[@]}" "--")
-	
+	cmd+=("${sandbox_rules[@]}")
+
+	# Add separator and any extra backend args (from -- or CCO_SANDBOX_ARGS_FILE)
+	# Format: sandbox [opts] -- [backend-args...] -- <command>
+	# The sandbox script collects everything between the two -- markers as backend args
+	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
+		cmd+=("--" "${sandbox_extra_args[@]}" "--")
+		log "Adding ${#sandbox_extra_args[@]} extra sandbox backend args"
+	fi
+
 	# Debug: Show the full sandbox command being executed
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
-		log "DEBUG: Sandbox command: ${cmd[@]}"
-		log "DEBUG: Write paths:"
-		for wp in "${write_paths[@]}"; do
-			log "  $wp"
-		done
+		log "DEBUG: Sandbox command: ${cmd[*]}"
 	fi
-	
+
 	# Get command to use and split into array
 	local cmd_str
 	cmd_str=$(get_command)
 	# Split command string into array (handles multi-word commands)
-	read -ra cmd_array <<< "$cmd_str"
+	read -ra cmd_array <<<"$cmd_str"
 
 	# Add command
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode
-			cmd+=("bash")
+			# Interactive shell mode - use user's preferred shell
+			cmd+=("${SHELL:-bash}")
 		else
 			# Shell command mode
 			cmd+=("bash" "-c" "${claude_args[*]}")
@@ -908,7 +914,7 @@ run_native_sandbox() {
 			fi
 		fi
 	fi
-	
+
 	# Execute in sandbox with full environment
 	exec "${cmd[@]}"
 }
@@ -942,7 +948,7 @@ run_container() {
 		-v "$current_dir":"$current_dir"
 		-w "$current_dir"
 	)
-	
+
 	# Mount any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -1090,7 +1096,9 @@ run_container() {
 		local networking_method=""
 
 		# Check if Docker daemon supports host networking by looking for host network driver
-		if docker network ls --format "{{.Driver}}" 2>/dev/null | grep -q "^host$"; then
+		if [[ "$force_bridge_network" = true ]]; then
+			networking_method="Docker bridge networking (forced via --force-docker-bridge-network)"
+		elif docker network ls --format "{{.Driver}}" 2>/dev/null | grep -q "^host$"; then
 			use_host_networking=true
 			networking_method="Docker host networking"
 		else
@@ -1148,7 +1156,7 @@ run_container() {
 	fi
 	log "Mounting ~/.claude directory: $HOME/.claude → $container_home/.claude"
 	docker_args+=(-v "$HOME/.claude":"$container_home/.claude")
-	
+
 	# If the detected config directory is different from ~/.claude, mount it too
 	if [[ "$host_system_claude_dir" != "$HOME/.claude" ]]; then
 		log "Also mounting config directory: $host_system_claude_dir → $container_home/.config/claude"
@@ -1205,7 +1213,7 @@ run_container() {
 	# Mount main .claude.json from home directory (this is separate from .claude/)
 	# Create it if it doesn't exist to ensure Claude can write to it
 	if [[ ! -f "$HOME/.claude.json" ]]; then
-		echo "{}" > "$HOME/.claude.json"
+		echo "{}" >"$HOME/.claude.json"
 	fi
 	log "Mounting main .claude.json from home directory"
 	docker_args+=(-v "$HOME/.claude.json":"$container_home/.claude.json")
@@ -1220,6 +1228,12 @@ run_container() {
 	[[ -f "$HOME/.gitconfig" ]] && docker_args+=(-v "$HOME/.gitconfig":"$container_home/.gitconfig:ro")
 	[[ -d "$HOME/.ssh" ]] && docker_args+=(-v "$HOME/.ssh":"$container_home/.ssh:ro")
 
+	# Add any extra sandbox args (from -- or CCO_SANDBOX_ARGS_FILE)
+	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
+		log "Adding ${#sandbox_extra_args[@]} extra sandbox args"
+		docker_args+=("${sandbox_extra_args[@]}")
+	fi
+
 	# Function to start background SIGWINCH monitor
 	start_sigwinch_monitor() {
 		local container_name="$1"
@@ -1230,6 +1244,7 @@ run_container() {
 			sleep 2
 
 			# Set up signal handler to forward SIGWINCH to container processes
+			# shellcheck disable=SC2064  # Intentional: expand container_name at definition time
 			trap "docker exec '$container_name' pkill -SIGWINCH -u hostuser 2>/dev/null" WINCH
 
 			# Keep monitor alive while container exists
@@ -1242,11 +1257,11 @@ run_container() {
 	# Run the container (entrypoint will handle user setup)
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode
+			# Interactive shell mode - Docker image may not have user's $SHELL
 			start_sigwinch_monitor "$CONTAINER_NAME"
 			docker run "${docker_args[@]}" "$IMAGE_NAME" bash
 		else
-			# Shell command mode - execute the provided command
+			# Shell command mode
 			docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
 		fi
 	else
@@ -1258,7 +1273,7 @@ run_container() {
 			# Get command to use and split into array for Docker run too
 			local cmd_str
 			cmd_str=$(get_command)
-			read -ra cmd_array <<< "$cmd_str"
+			read -ra cmd_array <<<"$cmd_str"
 
 			# Check if we're running a custom command (CCO_COMMAND or --command)
 			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
@@ -1415,6 +1430,7 @@ additional_ro_paths=()
 deny_paths=()
 custom_env_vars=()
 custom_packages=()
+sandbox_extra_args=()
 docker_access=false
 allow_oauth_refresh=false
 allow_keychain=false
@@ -1423,8 +1439,39 @@ rebuild_image=false
 pull_image=false
 shell_mode=false
 safe_mode=false
+force_bridge_network=false
 claude_command_flag=""
 command_flag=""
+
+# Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
+if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
+	if [[ -f "$CCO_SANDBOX_ARGS_FILE" ]]; then
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			# Skip empty lines and comments
+			[[ -z "$line" || "$line" == \#* ]] && continue
+			sandbox_extra_args+=("$line")
+		done <"$CCO_SANDBOX_ARGS_FILE"
+		log "Loaded ${#sandbox_extra_args[@]} sandbox args from $CCO_SANDBOX_ARGS_FILE"
+	else
+		warn "CCO_SANDBOX_ARGS_FILE set but file not found: $CCO_SANDBOX_ARGS_FILE"
+	fi
+fi
+
+# Normalize --flag=value into --flag value for consistent parsing
+# Only normalize args before --, passthrough args are left as-is
+normalized_args=()
+found_separator=false
+for arg in "$@"; do
+	if [[ "$arg" == "--" ]]; then
+		found_separator=true
+		normalized_args+=("$arg")
+	elif [[ "$found_separator" == false && "$arg" == --*=* ]]; then
+		normalized_args+=("${arg%%=*}" "${arg#*=}")
+	else
+		normalized_args+=("$arg")
+	fi
+done
+set -- "${normalized_args[@]}"
 
 # First pass: Extract cco-specific flags and collect remaining args
 # This ensures --add-dir and other cco flags are parsed before subcommands
@@ -1447,8 +1494,12 @@ while [[ $# -gt 0 ]]; do
 		pull_image=true
 		shift
 		;;
-	--docker)
+	--docker-socket)
 		docker_access=true
+		shift
+		;;
+	--force-docker-bridge-network)
+		force_bridge_network=true
 		shift
 		;;
 	--allow-oauth-refresh)
@@ -1467,37 +1518,21 @@ while [[ $# -gt 0 ]]; do
 		safe_mode=true
 		shift
 		;;
-	--claude-command | --claude-command=*)
-		# Handle both --claude-command "cmd" and --claude-command="cmd" notations
-		if [[ "$1" == *"="* ]]; then
-			# --claude-command="cmd" notation
-			claude_command_flag="${1#*=}"
-			shift
-		else
-			# --claude-command "cmd" notation
-			if [[ $# -lt 2 ]]; then
-				error "--claude-command requires an argument (command to use instead of 'claude')"
-				exit 1
-			fi
-			claude_command_flag="$2"
-			shift 2
+	--claude-command)
+		if [[ $# -lt 2 ]]; then
+			error "--claude-command requires an argument (command to use instead of 'claude')"
+			exit 1
 		fi
+		claude_command_flag="$2"
+		shift 2
 		;;
-	--command | --command=*)
-		# Handle both --command "cmd" and --command="cmd" notations
-		if [[ "$1" == *"="* ]]; then
-			# --command="cmd" notation
-			command_flag="${1#*=}"
-			shift
-		else
-			# --command "cmd" notation
-			if [[ $# -lt 2 ]]; then
-				error "--command requires an argument (command to run instead of claude)"
-				exit 1
-			fi
-			command_flag="$2"
-			shift 2
+	--command)
+		if [[ $# -lt 2 ]]; then
+			error "--command requires an argument (command to run instead of claude)"
+			exit 1
 		fi
+		command_flag="$2"
+		shift 2
 		;;
 	--env | -e)
 		if [[ $# -lt 2 ]]; then
@@ -1569,18 +1604,24 @@ while [[ $# -gt 0 ]]; do
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
 				# Stop if we hit a known subcommand
 				case "$1" in
-					shell|codex|droid|opencode|self-update|cleanup|info|backup-creds|restore-creds|pull|rebuild)
-						# This is a subcommand, not a directory
-						break
-						;;
-					*)
-						handle_add_dir_entry "$1"
-						shift
-						;;
-					esac
-				done
-			fi
-			;;
+				shell | codex | droid | opencode | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+					# This is a subcommand, not a directory
+					break
+					;;
+				*)
+					handle_add_dir_entry "$1"
+					shift
+					;;
+				esac
+			done
+		fi
+		;;
+	--)
+		# Everything after -- goes to the sandbox backend (docker/bwrap/sandbox-exec)
+		shift
+		sandbox_extra_args+=("$@")
+		break
+		;;
 	*)
 		# Not a cco flag, keep for subcommand/Claude processing
 		remaining_args+=("$1")
@@ -1705,83 +1746,57 @@ if [[ $# -gt 0 ]]; then
 		echo ""
 		echo "Commands:"
 		echo "  self-update         Update cco to latest version"
-		echo "  shell [cmd...]      Start interactive shell or run shell command in the cco container"
-		echo "  codex [args...]     Run OpenAI Codex in sandbox (equivalent to --add-dir ~/.codex --command=\"codex --dangerously-bypass-approvals-and-sandbox\")"
-		echo "  droid [args...]     Run Droid CLI in sandbox (equivalent to --add-dir ~/.factory --command=\"droid\")"
-		echo "  opencode [args...]  Run OpenCode in sandbox (equivalent to --add-dir ~/.opencode ~/.config/opencode ~/.cache/opencode ~/.local/share/opencode ~/.local/state/opencode --command=\"opencode\")"
+		echo "  shell [cmd...]      Run shell command in sandbox (or start an interactive shell)"
+		echo "  codex [args...]     Run OpenAI Codex in sandbox"
+		echo "  droid [args...]     Run Droid CLI in sandbox"
+		echo "  opencode [args...]  Run OpenCode in sandbox"
 		echo "  cleanup             Remove all cco containers"
-		echo "  info                Show system information and readiness status"
-		echo "  pull                Pull latest pre-built image from registry"
+		echo "  info                Show system info and readiness"
+		echo "  pull                Pull latest pre-built image"
 		echo "  rebuild             Rebuild Docker image from source"
+		echo "  backup-creds        Backup Claude Code credentials"
+		echo "  restore-creds       Restore credentials from backup"
 		echo ""
 		echo "Options:"
-		echo "  --rebuild           Force rebuild of Docker image (updates to latest Claude Code)"
-		echo "  --pull              Pull latest pre-built image before starting container"
-		echo "  --version, -v       Show version information"
-		echo "  --env, -e KEY=VAL   Set environment variable in container"
-		echo "  --packages, -p      Install additional apt packages into container"
-		echo "  --backend TYPE      Force specific sandbox backend (auto, native, docker)"
-		echo "  --safe              Native sandbox only; hides the rest of your home directory"
-		echo "                      Re-expose paths explicitly with --add-dir/--allow-readonly"
-		echo "  --docker (beta)     Mount host Docker socket (Claude can control host Docker; defeats isolation)"
-		echo "  --allow-oauth-refresh (beta)"
-		echo "                      Allow OAuth token refresh with automatic sync-back"
-		echo "                      Grants Claude write access to your host credentials; use only if you accept that risk"
-		echo "                      Creates timestamped backups and uses clondom protection"
-		echo "  --allow-keychain (seatbelt mode, EXPERIMENTAL)"
-		echo "                      Allow Keychain access for OAuth token refresh (DANGEROUS)"
-		echo "                      Grants Claude read/write access to your ENTIRE Keychain"
-		echo "                      Claude can access ALL passwords, certificates, and credentials"
-		echo "                      This is extremely dangerous - only enable if you accept this risk"
-		echo "                      Consider creating a separate Keychain for Claude Code"
+		echo "  --rebuild             Force rebuild Docker image"
+		echo "  --pull                Pull latest image before starting"
+		echo "  --version, -v         Show version"
+		echo "  --env, -e KEY=VAL     Set container environment variable"
+		echo "  --packages, -p PKG    Install additional apt packages"
+		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
+		echo "  --safe                Hide home dir except working dir (native only)"
+		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --force-docker-bridge-network"
+		echo "                        Use bridge networking instead of host (Docker only)"
+		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
+		echo "  --allow-keychain      Allow macOS Keychain access (DANGEROUS)"
 		echo "  --enable-background-tasks"
-		echo "                      Enable Claude Code background tasks (disabled by default)"
-		echo "                      Background tasks provide enhanced functionality like"
-		echo "                      improved code analysis and autonomous development features"
-		echo "  --claude-command CMD"
-		echo "                      Use alternative Claude command instead of 'claude'"
-		echo "                      e.g., --claude-command 'ccr code' to use 'ccr code' command"
-		echo "                      Can also be set via CCO_CLAUDE_COMMAND environment variable"
-		echo "  --command CMD       Run arbitrary command instead of Claude Code"
-		echo "                      e.g., --command 'python3' to run Python in the sandbox"
-		echo "                      Can also be set via CCO_COMMAND environment variable"
-		echo "                      Overrides --claude-command when both are specified"
-		echo "  --allow-readonly PATH [PATH ...]"
-		echo "                      Expose files or directories read-only inside the sandbox"
-		echo "  --deny-path PATH [PATH ...]"
-		echo "                      Hide paths from the sandbox (appear empty/unavailable)"
-		echo "  --help, -h          Show this help message"
+		echo "                        Enable Claude Code background tasks"
+		echo "  --claude-command CMD  Alternative Claude command (e.g., 'ccr code')"
+		echo "  --command CMD         Run arbitrary command instead of Claude"
+		echo "  --allow-readonly PATH Expose path read-only in sandbox"
+		echo "  --deny-path PATH      Hide path from sandbox"
+		echo "  --add-dir PATH[:ro|rw]"
+		echo "                        Allow tool access to directory (Claude Code option)"
+		echo "  --help, -h            Show this help"
 		echo ""
-		echo "Claude Code Options (passed through):"
-		echo "  --add-dir <paths...>        Additional directories to allow tool access to"
-		echo "                             Suffix with :ro or :rw (default) for permissions"
-		echo ""
-		echo "All other arguments are passed to Claude Code inside the container."
-		echo "This means all Claude Code options (--resume, --model, etc.) work normally."
-		echo ""
-		echo "Experimental Commands:"
-		echo "  backup-creds      Create a backup of current Claude Code credentials"
-		echo "  restore-creds     Restore credentials from most recent backup (with confirmation)"
-		echo "                    or specify backup file path to restore specific backup"
-		echo ""
-		echo "Safety Recommendation:"
-		echo "  Before using --allow-oauth-refresh for the first time, run:"
-		echo "    cco backup-creds"
+		echo "Sandbox Passthrough (-- args):"
+		echo "  Arguments after -- are passed to the sandbox backend."
+		echo "  Example: cco -- -p 3000:3000    # Forward port 3000 (Docker)"
 		echo ""
 		echo "Environment Variables:"
-		echo "  - Automatically loads .env file if present"
-		echo "  - Passes through ANTHROPIC_API_KEY, proxy settings, git config, etc."
-		echo "  - Use --env to set custom variables"
-	echo "  - CCO_CLAUDE_COMMAND  Alternative Claude command to use (e.g., 'ccr code')"
-	echo "                      Overridden by --claude-command flag if both are set"
-	echo "  - CCO_COMMAND       Arbitrary command to run instead of Claude Code"
-	echo "                      Overridden by --command flag if both are set"
+		echo "  CCO_CLAUDE_COMMAND    Alternative Claude command"
+		echo "  CCO_COMMAND           Arbitrary command (overrides CCO_CLAUDE_COMMAND)"
+		echo "  CCO_SANDBOX_ARGS_FILE Persistent sandbox args file (one arg per line)"
+		echo "  ANTHROPIC_API_KEY     Passed through automatically"
+		echo "  Also loads .env file and passes proxy settings, git config."
 		echo ""
 		echo "Requirements:"
-		echo "  - Sandbox backend: ONE of the following:"
-		echo "    - macOS: sandbox-exec (built-in) OR Docker"
-		echo "    - Linux: bubblewrap (bwrap) OR Docker"
-		echo "  - Claude Code authenticated (run \`claude\` and login)"
+		echo "  - macOS: sandbox-exec (built-in) or Docker"
+		echo "  - Linux: bubblewrap (bwrap) or Docker"
+		echo "  - Claude Code authenticated (run 'claude' to login)"
+		echo ""
+		echo "See README for detailed examples and sandbox args file format."
 		exit 0
 		;;
 	*)
@@ -1810,7 +1825,7 @@ main() {
 			safe_mode=false
 		fi
 	fi
-	
+
 	# Only verify Claude authentication if we need it
 	if needs_claude_authentication; then
 		verify_claude_authentication
@@ -1827,7 +1842,6 @@ main() {
 				warn "Failed to pull pre-built image, using existing or building locally"
 			fi
 		fi
-
 
 		# Determine whether to pull pre-built image or build locally
 		if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
