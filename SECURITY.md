@@ -202,7 +202,7 @@ You can verify the protection is working:
 
 ⚠️ **The following features are optional and may introduce additional security risks:**
 
-### Host Docker Socket (`--docker`)
+### Host Docker Socket (`--docker-socket`)
 **Purpose**: Mount the host's Docker socket so Claude can build/run containers from inside `cco`.
 
 **Security Implications**:

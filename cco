@@ -1478,7 +1478,7 @@ while [[ $# -gt 0 ]]; do
 		pull_image=true
 		shift
 		;;
-	--docker)
+	--docker-socket)
 		docker_access=true
 		shift
 		;;
@@ -1761,7 +1761,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --packages, -p PKG    Install additional apt packages"
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
-		echo "  --docker              Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
 		echo "  --allow-keychain      Allow macOS Keychain access (DANGEROUS)"
 		echo "  --enable-background-tasks"

@@ -174,7 +174,7 @@ cco --help
 ```
 
 ### Advanced options
-> ⚠️ **Beta security trade-offs**: `--docker` and `--allow-oauth-refresh` weaken isolation. Only enable them if you fully understand and accept the risks (host Docker control, host credential writes).
+> ⚠️ **Beta security trade-offs**: `--docker-socket` and `--allow-oauth-refresh` weaken isolation. Only enable them if you fully understand and accept the risks (host Docker control, host credential writes).
 ```bash
 # Force a specific sandbox backend
 cco --backend native  # Use native sandbox (sandbox-exec/bubblewrap)
@@ -198,7 +198,7 @@ cco --env API_KEY=sk-123
 cco --packages terraform,kubectl
 
 # Enable Docker access
-cco --docker
+cco --docker-socket
 
 # Update cco installation
 cco self-update
@@ -215,7 +215,7 @@ cco --allow-readonly ~/.ssh
 cco --deny-path ~/Downloads
 ```
 
-- `--docker` (beta): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
+- `--docker-socket` (experimental): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
 - `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
