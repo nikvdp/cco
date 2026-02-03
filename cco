@@ -1100,7 +1100,9 @@ run_container() {
 		local networking_method=""
 
 		# Check if Docker daemon supports host networking by looking for host network driver
-		if docker network ls --format "{{.Driver}}" 2>/dev/null | grep -q "^host$"; then
+		if [[ "$force_bridge_network" = true ]]; then
+			networking_method="Docker bridge networking (forced via --force-docker-bridge-network)"
+		elif docker network ls --format "{{.Driver}}" 2>/dev/null | grep -q "^host$"; then
 			use_host_networking=true
 			networking_method="Docker host networking"
 		else
@@ -1440,6 +1442,7 @@ rebuild_image=false
 pull_image=false
 shell_mode=false
 safe_mode=false
+force_bridge_network=false
 claude_command_flag=""
 command_flag=""
 
@@ -1480,6 +1483,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--docker-socket)
 		docker_access=true
+		shift
+		;;
+	--force-docker-bridge-network)
+		force_bridge_network=true
 		shift
 		;;
 	--allow-oauth-refresh)
@@ -1762,6 +1769,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --force-docker-bridge-network"
+		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
 		echo "  --allow-keychain      Allow macOS Keychain access (DANGEROUS)"
 		echo "  --enable-background-tasks"

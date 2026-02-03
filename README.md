@@ -216,12 +216,50 @@ cco --deny-path ~/Downloads
 ```
 
 - `--docker-socket` (experimental): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
-- `--allow-oauth-refresh` (beta): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
+- `--force-docker-bridge-network` (Docker only): Force bridge networking instead of host networking. By default cco uses `--network=host` when available (Linux, OrbStack). Use this if you need port isolation or want explicit `-p` port forwarding.
+- `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
 - `--deny-path PATH`: Hide a path entirely so it becomes inaccessible to Claude (appears empty/unavailable).
 
 ### Sandbox Backend Passthrough (`--`)
+
+Arguments after `--` are passed directly to the underlying sandbox backend (Docker, bwrap, or sandbox-exec). This enables advanced configuration like port forwarding without `cco` needing explicit flags for every option:
+
+```bash
+# Forward ports for development servers (Docker mode)
+cco -- -p 3000:3000                      # Forward port 3000
+cco -- -p 3000:3000 -p 8080:8080         # Forward multiple ports
+cco -- -e "MESSAGE=hello world"          # Set env with spaces
+```
+
+Shell quoting is preserved - each argument after `--` remains a separate argv element.
+
+### Persistent Sandbox Args (`CCO_SANDBOX_ARGS_FILE`)
+
+For persistent configuration, set `CCO_SANDBOX_ARGS_FILE` to point to a file containing sandbox backend arguments (one per line):
+
+```bash
+export CCO_SANDBOX_ARGS_FILE=~/.config/cco/sandbox-args
+```
+
+Example file (`~/.config/cco/sandbox-args`):
+```
+# Forward dev server port
+-p
+3000:3000
+# Forward database port  
+-p
+5432:5432
+# Custom environment
+-e
+DATABASE_URL=postgres://localhost/mydb
+```
+
+**Format rules:**
+- One argument per line (flag and value on separate lines)
+- Lines starting with `#` are comments
+- Empty lines are ignored
 ## Command Pass-through
 
 `cco` acts as a wrapper - any options it doesn't recognize get passed directly to Claude Code:
