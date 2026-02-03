@@ -87,14 +87,23 @@ while [[ $# -gt 0 ]]; do
 	-h | --help) usage ;;
 	--)
 		shift
-		# Collect backend args until we hit another -- or end of args
-		while [[ $# -gt 0 && "$1" != "--" ]]; do
-			backend_extra_args+=("$1")
-			shift
+		# If another -- exists later, treat args between as backend args.
+		# Otherwise, this is the standard end-of-options marker for the command.
+		has_backend_args=false
+		for arg in "$@"; do
+			if [[ "$arg" == "--" ]]; then
+				has_backend_args=true
+				break
+			fi
 		done
-		# If we hit another --, skip it (it separates backend args from command)
-		if [[ "${1:-}" == "--" ]]; then
-			shift
+		if [[ "$has_backend_args" == true ]]; then
+			while [[ $# -gt 0 && "$1" != "--" ]]; do
+				backend_extra_args+=("$1")
+				shift
+			done
+			if [[ "${1:-}" == "--" ]]; then
+				shift
+			fi
 		fi
 		break
 		;;
