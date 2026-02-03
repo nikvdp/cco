@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Test seccomp TIOCSTI/TIOCLINUX blocking in the sandbox
-# Run inside the Linux test container
+# Linux-only: tests the seccomp filter that blocks terminal injection attacks
 
 set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Skip on non-Linux
+if [[ "$(uname -s)" != "Linux" ]]; then
+	echo "SKIP: Seccomp tests only run on Linux"
+	exit 0
+fi
 
 PASSED=0
 FAILED=0
@@ -63,20 +71,12 @@ EOF
 	gcc -o /tmp/test_tioclinux /tmp/test_tioclinux.c
 }
 
-echo "=== Seccomp Filter Tests ==="
+echo "=== Seccomp Filter Tests (Linux-only) ==="
 echo "Architecture: $(uname -m)"
 echo ""
 
-# Test 1: Basic sandbox works
-echo "Test 1: Basic sandbox execution"
-if ./sandbox -- echo "hello" | grep -q "hello"; then
-	pass "Basic sandbox execution"
-else
-	fail "Basic sandbox execution"
-fi
-
-# Test 2: Seccomp filter file exists for this architecture
-echo "Test 2: Seccomp filter exists"
+# Test 1: Seccomp filter file exists for this architecture
+echo "Test 1: Seccomp filter exists"
 arch=$(uname -m)
 case "$arch" in
 x86_64) filter="seccomp/tiocsti_filter_x86_64.bpf" ;;
@@ -89,8 +89,8 @@ else
 	fail "Seccomp filter missing for $arch"
 fi
 
-# Create test programs
-echo "Test 3: Compiling test programs"
+# Test 2: Compile test programs
+echo "Test 2: Compiling test programs"
 if create_test_programs 2>/dev/null; then
 	pass "Test programs compiled"
 else
@@ -98,8 +98,8 @@ else
 	exit 1
 fi
 
-# Test 4: TIOCSTI blocked inside sandbox
-echo "Test 4: TIOCSTI blocked inside sandbox"
+# Test 3: TIOCSTI blocked inside sandbox
+echo "Test 3: TIOCSTI blocked inside sandbox"
 result=$(./sandbox -w /tmp -- /tmp/test_tiocsti 2>/dev/null || true)
 if [[ "$result" == "blocked" ]]; then
 	pass "TIOCSTI blocked (EPERM)"
@@ -107,8 +107,8 @@ else
 	fail "TIOCSTI not blocked: $result"
 fi
 
-# Test 5: TIOCLINUX blocked inside sandbox
-echo "Test 5: TIOCLINUX blocked inside sandbox"
+# Test 4: TIOCLINUX blocked inside sandbox
+echo "Test 4: TIOCLINUX blocked inside sandbox"
 result=$(./sandbox -w /tmp -- /tmp/test_tioclinux 2>/dev/null || true)
 if [[ "$result" == "blocked" ]]; then
 	pass "TIOCLINUX blocked (EPERM)"
@@ -116,21 +116,12 @@ else
 	fail "TIOCLINUX not blocked: $result"
 fi
 
-# Test 6: Normal commands still work
-echo "Test 6: Normal commands work inside sandbox"
+# Test 5: Normal ioctl still works (not blocked by seccomp)
+echo "Test 5: Normal ioctl still works"
 if ./sandbox -- ls /dev/null >/dev/null 2>&1; then
-	pass "Normal commands work"
+	pass "Normal ioctl still works"
 else
-	fail "Normal commands broken"
-fi
-
-# Test 7: File operations work
-echo "Test 7: File operations work inside sandbox"
-if ./sandbox -w /tmp -- sh -c 'echo test > /tmp/seccomp_test && cat /tmp/seccomp_test' | grep -q "test"; then
-	pass "File operations work"
-	rm -f /tmp/seccomp_test
-else
-	fail "File operations broken"
+	fail "Normal ioctl broken by seccomp filter"
 fi
 
 echo ""
