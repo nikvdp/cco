@@ -874,8 +874,6 @@ run_native_sandbox() {
 	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
 		cmd+=("--" "${sandbox_extra_args[@]}" "--")
 		log "Adding ${#sandbox_extra_args[@]} extra sandbox backend args"
-	else
-		cmd+=("--")
 	fi
 
 	# Debug: Show the full sandbox command being executed
