@@ -373,9 +373,6 @@ run_macos() {
 	for ap in "${ro_paths[@]+"${ro_paths[@]}"}"; do
 		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
 	done
-	for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
-		if [[ ! -d "$ap" && ! -e "$ap" ]]; then : >"$ap"; fi
-	done
 
 	# Build a Seatbelt profile that denies writes globally, then whitelists:
 	# - The current directory (subpath)
