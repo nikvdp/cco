@@ -215,6 +215,69 @@ run_linux() {
 		done
 	}
 
+	# Helper: create a deny directory with explicit permissions
+	make_deny_dir() {
+		local mode="$1"
+		local dir
+		dir=$(mktemp -d)
+		chmod "$mode" "$dir"
+		cleanup_paths+=("$dir")
+		printf '%s' "$dir"
+	}
+
+	# Helper: create a deny file with explicit permissions
+	make_deny_file() {
+		local mode="$1"
+		local file
+		file=$(mktemp)
+		: >"$file"
+		chmod "$mode" "$file"
+		cleanup_paths+=("$file")
+		printf '%s' "$file"
+	}
+
+	# Helper: ensure path under overlay exists (permissions are set later).
+	# Files and dirs created are recorded so we can chmod them after the overlay is built.
+	deny_overlay_files=()
+	deny_overlay_dirs=()
+	create_deny_overlay_target() {
+		local overlay_root="$1"
+		local deny_root="$2"
+		local target="$3"
+		local rel
+		rel="${target#$deny_root/}"
+		[[ "$target" == "$deny_root" ]] && return 0
+
+		local is_dir=false
+		if [[ -d "$target" ]]; then
+			is_dir=true
+		fi
+
+		if [[ "$is_dir" == true ]]; then
+			local parent="$overlay_root"
+			IFS='/' read -r -a parts <<<"$rel"
+			for part in "${parts[@]}"; do
+				parent="$parent/$part"
+				if [[ ! -d "$parent" ]]; then
+					mkdir -p "$parent"
+				fi
+				deny_overlay_dirs+=("$parent")
+			done
+		else
+			local parent="$overlay_root"
+			IFS='/' read -r -a parts <<<"$rel"
+			for part in "${parts[@]:0:${#parts[@]}-1}"; do
+				parent="$parent/$part"
+				if [[ ! -d "$parent" ]]; then
+					mkdir -p "$parent"
+				fi
+				deny_overlay_dirs+=("$parent")
+			done
+			: >"$overlay_root/$rel"
+			deny_overlay_files+=("$overlay_root/$rel")
+		fi
+	}
+
 	# Helper: check if path is under (or equal to) another path
 	is_subpath_of() {
 		local child="$1"
@@ -292,15 +355,35 @@ run_linux() {
 		local ap="${deny_paths[$i]}"
 
 		if [[ "${deny_has_exceptions[$i]}" == true ]]; then
-			# Deny path with exceptions: use tmpfs, then mount exceptions on top
+			# Deny path with exceptions: use exec-only overlay, then mount exceptions on top
 			if [[ -d "$ap" ]]; then
-				args+=(--tmpfs "$ap")
+				deny_dir=$(make_deny_dir 755)
+				deny_overlay_files=()
+				deny_overlay_dirs=()
+				# Pre-create mount points inside the overlay so bwrap can bind exceptions
+				for wp in "${write_paths[@]+"${write_paths[@]}"}"; do
+					if is_subpath_of "$wp" "$ap"; then
+						create_deny_overlay_target "$deny_dir" "$ap" "$wp"
+					fi
+				done
+				for rp in "${ro_paths[@]+"${ro_paths[@]}"}"; do
+					if is_subpath_of "$rp" "$ap"; then
+						create_deny_overlay_target "$deny_dir" "$ap" "$rp"
+					fi
+				done
+				# Lock down permissions after creating targets
+				for d in "${deny_overlay_dirs[@]+"${deny_overlay_dirs[@]}"}"; do
+					chmod 111 "$d"
+				done
+				chmod 111 "$deny_dir"
+				if [[ ${#deny_overlay_files[@]} -gt 0 ]]; then
+					chmod 000 "${deny_overlay_files[@]}"
+				fi
+				args+=(--ro-bind "$deny_dir" "$ap")
 			else
-				# For files, still use empty file overlay
-				empty_file=$(mktemp)
-				cleanup_paths+=("$empty_file")
-				: >"$empty_file"
-				args+=(--ro-bind "$empty_file" "$ap")
+				# For files, use no-permission overlay
+				deny_file=$(make_deny_file 000)
+				args+=(--ro-bind "$deny_file" "$ap")
 			fi
 
 			# Now mount allowed subpaths on top of the tmpfs
@@ -325,20 +408,16 @@ run_linux() {
 				fi
 			done
 		else
-			# Deny path without exceptions: use empty overlay (current behavior)
+			# Deny path without exceptions: use no-permission overlay
 			if [[ -d "$ap" ]]; then
-				empty_dir=$(mktemp -d)
-				cleanup_paths+=("$empty_dir")
-				args+=(--ro-bind "$empty_dir" "$ap")
+				deny_dir=$(make_deny_dir 000)
+				args+=(--ro-bind "$deny_dir" "$ap")
 			elif [[ -f "$ap" ]]; then
-				empty_file=$(mktemp)
-				cleanup_paths+=("$empty_file")
-				: >"$empty_file"
-				args+=(--ro-bind "$empty_file" "$ap")
+				deny_file=$(make_deny_file 000)
+				args+=(--ro-bind "$deny_file" "$ap")
 			else
-				empty_dir=$(mktemp -d)
-				cleanup_paths+=("$empty_dir")
-				args+=(--ro-bind "$empty_dir" "$ap")
+				deny_dir=$(make_deny_dir 000)
+				args+=(--ro-bind "$deny_dir" "$ap")
 			fi
 		fi
 	done
