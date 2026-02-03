@@ -245,7 +245,7 @@ run_linux() {
 		local deny_root="$2"
 		local target="$3"
 		local rel
-		rel="${target#$deny_root/}"
+		rel="${target#"$deny_root"/}"
 		[[ "$target" == "$deny_root" ]] && return 0
 
 		local is_dir=false
