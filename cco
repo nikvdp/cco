@@ -890,8 +890,8 @@ run_native_sandbox() {
 	# Add command
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode
-			cmd+=("bash")
+			# Interactive shell mode - use user's preferred shell
+			cmd+=("${SHELL:-bash}")
 		else
 			# Shell command mode
 			cmd+=("bash" "-c" "${claude_args[*]}")
@@ -1257,11 +1257,11 @@ run_container() {
 	# Run the container (entrypoint will handle user setup)
 	if [[ "$shell_mode" = true ]]; then
 		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode
+			# Interactive shell mode - Docker image may not have user's $SHELL
 			start_sigwinch_monitor "$CONTAINER_NAME"
 			docker run "${docker_args[@]}" "$IMAGE_NAME" bash
 		else
-			# Shell command mode - execute the provided command
+			# Shell command mode
 			docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
 		fi
 	else
