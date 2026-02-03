@@ -68,7 +68,8 @@ detect_sandbox_backend() {
 	fi
 
 	# Auto-detect best available backend
-	local os="$(uname -s)"
+	local os
+	os="$(uname -s)"
 
 	if [[ "$os" == "Darwin" ]]; then
 		# macOS: Check for sandbox-exec (Seatbelt)
@@ -162,8 +163,9 @@ resolve_path() {
 		return
 	fi
 
-	local dir=$(dirname "$expanded")
-	local base=$(basename "$expanded")
+	local dir base
+	dir=$(dirname "$expanded")
+	base=$(basename "$expanded")
 	if [[ "$dir" == ~* ]]; then
 		dir="${dir/#\~/$HOME}"
 	fi
@@ -878,11 +880,7 @@ run_native_sandbox() {
 
 	# Debug: Show the full sandbox command being executed
 	if [[ "${CCO_DEBUG:-}" == "1" ]]; then
-		log "DEBUG: Sandbox command: ${cmd[@]}"
-		log "DEBUG: Write paths:"
-		for wp in "${write_paths[@]}"; do
-			log "  $wp"
-		done
+		log "DEBUG: Sandbox command: ${cmd[*]}"
 	fi
 
 	# Get command to use and split into array
@@ -1248,6 +1246,7 @@ run_container() {
 			sleep 2
 
 			# Set up signal handler to forward SIGWINCH to container processes
+			# shellcheck disable=SC2064  # Intentional: expand container_name at definition time
 			trap "docker exec '$container_name' pkill -SIGWINCH -u hostuser 2>/dev/null" WINCH
 
 			# Keep monitor alive while container exists
