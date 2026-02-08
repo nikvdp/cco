@@ -114,10 +114,14 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* \
     && echo 'eval "$(direnv hook bash)"' >> /etc/bash.bashrc
 
-# Install Claude Code CLI (always fetch latest version)
+# Install CLI coding agents (always fetch latest versions)
 ARG CACHE_BUST=default
 RUN echo "Cache bust: ${CACHE_BUST}" && \
-    npm install -g @anthropic-ai/claude-code@latest
+    npm install -g \
+    @anthropic-ai/claude-code@latest \
+    @openai/codex@latest \
+    opencode-ai@latest \
+    @factory/cli@latest
 
 # Don't set a default user - let the entrypoint handle user creation and setup
 # The entrypoint will create the appropriate user and set HOME correctly
