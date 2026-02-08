@@ -949,11 +949,23 @@ run_container() {
 		-w "$current_dir"
 	)
 
+	# Determine the target user's home directory in container
+	local container_home="/home/hostuser"
+
 	# Mount any additional directories specified with --add-dir
+	# Remap $HOME-relative paths to $container_home inside the container
+	# so agents can find their config dirs (e.g. ~/.codex → /home/hostuser/.codex)
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
-			docker_args+=(-v "$dir":"$dir")
-			log "Mounting additional directory: $dir"
+			if [[ "$dir" == "$HOME"/* ]]; then
+				local relative="${dir#"$HOME"/}"
+				local container_dir="$container_home/$relative"
+				docker_args+=(-v "$dir":"$container_dir")
+				log "Mounting additional directory: $dir → $container_dir"
+			else
+				docker_args+=(-v "$dir":"$dir")
+				log "Mounting additional directory: $dir"
+			fi
 		fi
 	done
 
@@ -1035,6 +1047,10 @@ run_container() {
 		"GOOGLE_APPLICATION_CREDENTIALS"
 		# Factory / Droid
 		"FACTORY_API_KEY"
+		# Agent config dir overrides
+		"CODEX_HOME"
+		"PI_CODING_AGENT_DIR"
+		"GEMINI_SANDBOX"
 		# Other LLM providers (used by pi, opencode, etc.)
 		"GROQ_API_KEY"
 		"MISTRAL_API_KEY"
@@ -1157,9 +1173,7 @@ run_container() {
 	host_system_claude_dir=$(find_claude_config_dir)
 	local project_claude_dir="$current_dir/.claude"
 
-	# Determine the target user's home directory in container
-	# Always use hostuser now that we don't have a pre-existing node user
-	local container_home="/home/hostuser"
+	# container_home already set above (for additional_dirs remapping)
 
 	# Let Claude Code auto-detect its config directory (don't override with CLAUDE_CONFIG_DIR)
 
