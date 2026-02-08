@@ -1293,24 +1293,19 @@ run_container() {
 			docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
 		fi
 	else
-		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			start_sigwinch_monitor "$CONTAINER_NAME"
-			docker run "${docker_args[@]}" "$IMAGE_NAME"
-		else
-			start_sigwinch_monitor "$CONTAINER_NAME"
-			# Get command to use and split into array for Docker run too
-			local cmd_str
-			cmd_str=$(get_command)
-			read -ra cmd_array <<<"$cmd_str"
+		start_sigwinch_monitor "$CONTAINER_NAME"
+		# Get command to use and split into array for Docker run too
+		local cmd_str
+		cmd_str=$(get_command)
+		read -ra cmd_array <<<"$cmd_str"
 
-			# Check if we're running a custom command (CCO_COMMAND or --command)
-			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
-				# Running custom command - pass arguments as-is, no Claude-specific flags
-				docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
-			else
-				# Running Claude - use --dangerously-skip-permissions
-				docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
-			fi
+		# Check if we're running a custom command (CCO_COMMAND or --command)
+		if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+			# Running custom command - pass arguments as-is, no Claude-specific flags
+			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+		else
+			# Running Claude - use --dangerously-skip-permissions
+			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
 		fi
 	fi
 	local run_status=$?
