@@ -121,7 +121,9 @@ RUN echo "Cache bust: ${CACHE_BUST}" && \
     @anthropic-ai/claude-code@latest \
     @openai/codex@latest \
     opencode-ai@latest \
-    @factory/cli@latest
+    @factory/cli@latest \
+    @google/gemini-cli@latest \
+    @mariozechner/pi-coding-agent@latest
 
 # Don't set a default user - let the entrypoint handle user creation and setup
 # The entrypoint will create the appropriate user and set HOME correctly
