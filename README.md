@@ -220,7 +220,24 @@ cco --deny-path ~/Downloads
 - `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
-- `--deny-path PATH`: Hide a path entirely so it becomes inaccessible to Claude (appears empty/unavailable).
+- `--deny-path PATH`: Deny read/list/write access to a path so it is fully inaccessible to Claude.
+
+### Allow paths inside deny paths
+
+You can create exceptions within denied paths by combining `--deny-path` with `--allow-readonly` or `--add-dir`:
+
+```bash
+# Deny all of /run but allow access to a specific socket
+cco --deny-path /run --allow-readonly /run/user/1000/pipewire-0
+
+# Deny a config directory but allow a specific subdirectory
+cco --deny-path ~/.config --add-dir ~/.config/myapp
+```
+
+**Precedence rules:**
+- Allow paths that are subpaths of denied paths act as specific exceptions
+- The denied parent remains inaccessible (no read/list/write) except for explicitly allowed subpaths
+- Works consistently on both Linux (bubblewrap) and macOS (Seatbelt)
 
 ### Sandbox Backend Passthrough (`--`)
 
