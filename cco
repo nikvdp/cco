@@ -1627,7 +1627,7 @@ while [[ $# -gt 0 ]]; do
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
 				# Stop if we hit a known subcommand
 				case "$1" in
-				shell | codex | droid | opencode | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+				shell | codex | droid | opencode | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
 					# This is a subcommand, not a directory
 					break
 					;;
@@ -1716,6 +1716,28 @@ if [[ $# -gt 0 ]]; then
 		# All remaining arguments are passed to opencode
 		claude_args=("$@")
 		;;
+	pi)
+		# Pi coding agent mode - YOLO by default, no skip-permissions flag needed
+		command_flag="pi"
+		# Add ~/.pi to additional directories if it exists (settings, sessions, extensions)
+		if [[ -d "$HOME/.pi" ]]; then
+			additional_dirs+=("$HOME/.pi")
+		fi
+		shift
+		# All remaining arguments are passed to pi
+		claude_args=("$@")
+		;;
+	gemini)
+		# Google Gemini CLI mode - use --yolo for autonomous operation
+		command_flag="gemini --yolo"
+		# Add ~/.gemini to additional directories if it exists (settings, sessions)
+		if [[ -d "$HOME/.gemini" ]]; then
+			additional_dirs+=("$HOME/.gemini")
+		fi
+		shift
+		# All remaining arguments are passed to gemini
+		claude_args=("$@")
+		;;
 	cleanup)
 		log "Cleaning up cco containers..."
 		containers=$(docker ps -a --format "{{.Names}}" | grep "^cco-" || true)
@@ -1773,6 +1795,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  codex [args...]     Run OpenAI Codex in sandbox"
 		echo "  droid [args...]     Run Droid CLI in sandbox"
 		echo "  opencode [args...]  Run OpenCode in sandbox"
+		echo "  pi [args...]        Run Pi coding agent in sandbox"
+		echo "  gemini [args...]    Run Google Gemini CLI in sandbox"
 		echo "  cleanup             Remove all cco containers"
 		echo "  info                Show system info and readiness"
 		echo "  pull                Pull latest pre-built image"
@@ -1814,7 +1838,10 @@ if [[ $# -gt 0 ]]; then
 		echo "  CCO_COMMAND           Arbitrary command (overrides CCO_CLAUDE_COMMAND)"
 		echo "  CCO_SANDBOX_ARGS_FILE Persistent sandbox args file (one arg per line)"
 		echo "  ANTHROPIC_API_KEY     Passed through automatically"
-		echo "  Also loads .env file and passes proxy settings, git config."
+		echo "  OPENAI_API_KEY        Passed through automatically"
+		echo "  GEMINI_API_KEY        Passed through automatically"
+		echo "  FACTORY_API_KEY       Passed through automatically"
+		echo "  Also loads .env file and passes LLM provider keys, proxy settings, git config."
 		echo ""
 		echo "Requirements:"
 		echo "  - macOS: sandbox-exec (built-in) or Docker"
