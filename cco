@@ -1021,9 +1021,37 @@ run_container() {
 
 	# Pass through relevant environment variables
 	local env_vars=(
+		# Anthropic / Claude Code
 		"ANTHROPIC_API_KEY"
 		"ANTHROPIC_BASE_URL"
 		"CLAUDE_CONFIG_DIR"
+		# OpenAI / Codex
+		"OPENAI_API_KEY"
+		# Google / Gemini
+		"GEMINI_API_KEY"
+		"GOOGLE_API_KEY"
+		"GOOGLE_CLOUD_PROJECT"
+		"GOOGLE_CLOUD_LOCATION"
+		"GOOGLE_APPLICATION_CREDENTIALS"
+		# Factory / Droid
+		"FACTORY_API_KEY"
+		# Other LLM providers (used by pi, opencode, etc.)
+		"GROQ_API_KEY"
+		"MISTRAL_API_KEY"
+		"XAI_API_KEY"
+		"OPENROUTER_API_KEY"
+		"CEREBRAS_API_KEY"
+		"HUGGINGFACE_API_KEY"
+		"AI_GATEWAY_API_KEY"
+		# Chinese model providers
+		"MOONSHOT_API_KEY"
+		"KIMI_API_KEY"
+		"ZHIPU_API_KEY"
+		"ZAI_API_KEY"
+		"MINIMAX_API_KEY"
+		"DASHSCOPE_API_KEY"
+		"QWEN_API_KEY"
+		# Terminal / locale / proxy
 		"XDG_CONFIG_HOME"
 		"NO_COLOR"
 		"TERM"
