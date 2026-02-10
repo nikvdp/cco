@@ -38,14 +38,14 @@ else
 fi
 
 echo "Test: .claude.json.lock is writable inside sandbox"
-if output=$(./cco shell 'touch ~/.claude.json.lock/test_write && rm ~/.claude.json.lock/test_write && echo OK' 2>&1) && [[ "$output" == "OK" ]]; then
+if output=$(./cco shell 'touch ~/.claude.json.lock/test_write && rm ~/.claude.json.lock/test_write && echo OK') && [[ "$output" == "OK" ]]; then
 	pass ".claude.json.lock is writable inside sandbox"
 else
 	fail ".claude.json.lock is writable inside sandbox: got '$output'"
 fi
 
 echo "Test: Can create and remove files in .claude.json.lock (simulates steno lock)"
-if output=$(./cco shell 'mkdir -p ~/.claude.json.lock/subdir && echo data > ~/.claude.json.lock/subdir/lockfile && cat ~/.claude.json.lock/subdir/lockfile && rm -rf ~/.claude.json.lock/subdir' 2>&1) && [[ "$output" == "data" ]]; then
+if output=$(./cco shell 'mkdir -p ~/.claude.json.lock/subdir && echo data > ~/.claude.json.lock/subdir/lockfile && cat ~/.claude.json.lock/subdir/lockfile && rm -rf ~/.claude.json.lock/subdir') && [[ "$output" == "data" ]]; then
 	pass "Can create and remove files in .claude.json.lock"
 else
 	fail "Can create and remove files in .claude.json.lock: got '$output'"
@@ -59,7 +59,8 @@ echo ""
 echo "--- ~/.claude.json ---"
 
 echo "Test: .claude.json is writable inside sandbox"
-if ./cco shell 'cp ~/.claude.json ~/.claude.json.bak && cp ~/.claude.json.bak ~/.claude.json && rm ~/.claude.json.bak && echo OK' 2>&1 | grep -q "OK"; then
+# Test direct write to the file (not sibling creation, which requires writable $HOME)
+if output=$(./cco shell 'cat ~/.claude.json > /tmp/cco_test_backup && cp /tmp/cco_test_backup ~/.claude.json && rm /tmp/cco_test_backup && echo OK') && [[ "$output" == "OK" ]]; then
 	pass ".claude.json is writable inside sandbox"
 else
 	fail ".claude.json is writable inside sandbox"
@@ -80,14 +81,14 @@ else
 fi
 
 echo "Test: .npm is writable inside sandbox"
-if output=$(./cco shell 'touch ~/.npm/test_write && rm ~/.npm/test_write && echo OK' 2>&1) && [[ "$output" == "OK" ]]; then
+if output=$(./cco shell 'touch ~/.npm/test_write && rm ~/.npm/test_write && echo OK') && [[ "$output" == "OK" ]]; then
 	pass ".npm is writable inside sandbox"
 else
 	fail ".npm is writable inside sandbox: got '$output'"
 fi
 
 echo "Test: Can create subdirectories in .npm (simulates npm cache writes)"
-if output=$(./cco shell 'mkdir -p ~/.npm/_cacache/tmp/test_$$ && rmdir ~/.npm/_cacache/tmp/test_$$ && echo OK' 2>&1) && [[ "$output" == "OK" ]]; then
+if output=$(./cco shell 'mkdir -p ~/.npm/_cacache/tmp/test_$$ && rmdir ~/.npm/_cacache/tmp/test_$$ && echo OK') && [[ "$output" == "OK" ]]; then
 	pass "Can create subdirectories in .npm"
 else
 	fail "Can create subdirectories in .npm: got '$output'"
@@ -101,7 +102,7 @@ echo ""
 echo "--- .claude dir (sanity check) ---"
 
 echo "Test: .claude dir is writable inside sandbox"
-if output=$(./cco shell 'touch ~/.claude/test_write && rm ~/.claude/test_write && echo OK' 2>&1) && [[ "$output" == "OK" ]]; then
+if output=$(./cco shell 'touch ~/.claude/test_write && rm ~/.claude/test_write && echo OK') && [[ "$output" == "OK" ]]; then
 	pass ".claude dir is writable inside sandbox"
 else
 	fail ".claude dir is writable inside sandbox: got '$output'"
