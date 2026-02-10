@@ -833,6 +833,20 @@ run_native_sandbox() {
 	fi
 	sandbox_rules+=("--write" "$HOME/.claude.json")
 
+	# Allow access to .claude.json.lock directory used by Claude's atomic-write
+	# library (steno/write-file-atomic). Without this, mkdir fails with EROFS
+	# in the bwrap sandbox since $HOME is read-only. See #23.
+	if [[ ! -d "$HOME/.claude.json.lock" ]]; then
+		mkdir -p "$HOME/.claude.json.lock"
+	fi
+	sandbox_rules+=("--write" "$HOME/.claude.json.lock")
+
+	# Allow writes to ~/.npm for MCP server operations (npm cache/logs)
+	if [[ ! -d "$HOME/.npm" ]]; then
+		mkdir -p "$HOME/.npm"
+	fi
+	sandbox_rules+=("--write" "$HOME/.npm")
+
 	# Allow writes to project-specific .claude directory
 	if [[ -d "$project_claude_dir" ]]; then
 		sandbox_rules+=("--write" "$project_claude_dir")
