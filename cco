@@ -915,6 +915,31 @@ run_native_sandbox() {
 		fi
 	fi
 
+	# Apply custom environment variables (matching Docker backend behavior)
+	for custom_env in "${custom_env_vars[@]}"; do
+		if [[ "$custom_env" == *"="* ]]; then
+			local env_key="${custom_env%%=*}"
+			local env_val="${custom_env#*=}"
+			export "${env_key}=${env_val}"
+		else
+			# KEY-only format: pass through from host environment
+			if [[ -n "${!custom_env}" ]]; then
+				export "${custom_env}=${!custom_env}"
+			fi
+		fi
+	done
+
+	# Load .env file if it exists (matching Docker backend behavior)
+	if [[ -f ".env" ]]; then
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			# Skip empty lines and comments
+			[[ -z "$line" || "$line" == \#* ]] && continue
+			local env_key="${line%%=*}"
+			local env_val="${line#*=}"
+			export "${env_key}=${env_val}"
+		done <".env"
+	fi
+
 	# Execute in sandbox with full environment
 	exec "${cmd[@]}"
 }
