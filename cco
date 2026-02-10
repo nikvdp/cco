@@ -804,6 +804,21 @@ run_native_sandbox() {
 	# Always allow writes to current project directory
 	sandbox_rules+=("--write" "$current_dir")
 
+	# If inside a git worktree, the actual .git object store may be in a
+	# different directory (the main repo). Whitelist it so git commits work.
+	if command -v git &>/dev/null && git rev-parse --git-common-dir &>/dev/null 2>&1; then
+		local git_common_dir
+		git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"
+		if [[ -n "$git_common_dir" ]]; then
+			# Resolve to absolute path
+			git_common_dir="$(cd "$git_common_dir" && pwd)"
+			if [[ "$git_common_dir" != "$current_dir"/.git ]]; then
+				sandbox_rules+=("--write" "$git_common_dir")
+				log "Adding git common dir for worktree support: $git_common_dir"
+			fi
+		fi
+	fi
+
 	# Add any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -990,6 +1005,20 @@ run_container() {
 
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
+
+	# If inside a git worktree, mount the main repo's .git directory so
+	# git commits work (the object store lives in the main repo, not the worktree).
+	if command -v git &>/dev/null && git rev-parse --git-common-dir &>/dev/null 2>&1; then
+		local git_common_dir
+		git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"
+		if [[ -n "$git_common_dir" ]]; then
+			git_common_dir="$(cd "$git_common_dir" && pwd)"
+			if [[ "$git_common_dir" != "$current_dir"/.git ]]; then
+				docker_args+=(-v "$git_common_dir":"$git_common_dir")
+				log "Mounting git common dir for worktree support: $git_common_dir"
+			fi
+		fi
+	fi
 
 	# Mount any additional directories specified with --add-dir
 	# Remap $HOME-relative paths to $container_home inside the container
