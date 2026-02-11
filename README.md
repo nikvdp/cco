@@ -6,7 +6,7 @@
 
 **cco** (Claude Condom if you're so inclined) provides essential protection while Claude Code is up close and personal with your system. It automatically selects the best available sandboxing method - using native OS sandboxing (sandbox-exec on macOS, bubblewrap on Linux) when available, or falling back to Docker as a barrier to keep Claude contained while keeping your real system safe.
 
-**UPDATE**: can now sandbox openai's `codex` as well! Just start it with `cco codex` to don your codex condom!
+**UPDATE**: `cco` can now sandbox OpenAI's `codex` as well! Just start it with `cco codex` to don your codex condom! ([Opencode](https://github.com/anomalyco/opencode), [Pi coding agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), and factory.ai's [droid](https://factory.ai/) are supported as well.)
 
 ## Why protection matters
 
