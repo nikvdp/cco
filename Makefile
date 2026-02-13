@@ -1,7 +1,7 @@
 .PHONY: help test test-install clean format lint
 
 # Auto-discover tracked shell scripts (intersection of shfmt -f and git ls-files)
-SHELL_FILES := $(shell shfmt -f . | while read -r f; do git ls-files --error-unmatch "$$f" >/dev/null 2>&1 && echo "$$f"; done)
+SHELL_FILES = $(shell shfmt -f . | while read -r f; do git ls-files --error-unmatch "$$f" >/dev/null 2>&1 && echo "$$f"; done)
 
 # Default target
 help:
