@@ -168,26 +168,6 @@ apply_codex_docker_sandbox_fallback() {
 	log "Added Codex fallback argument '--sandbox danger-full-access' for Docker backend"
 }
 
-apply_codex_mode_docker_flags() {
-	if [[ "$codex_mode" != true ]]; then
-		return
-	fi
-
-	if [[ "$SANDBOX_BACKEND" != "docker" ]]; then
-		warn "--codex-mode is only supported with Docker backend; ignoring extra Docker flags"
-		return
-	fi
-
-	# Codex docs recommend these in some containerized environments where
-	# seccomp/AppArmor restrictions can break Codex's Linux sandbox setup.
-	sandbox_extra_args+=(
-		"--security-opt" "seccomp=unconfined"
-		"--cap-add" "SYS_ADMIN"
-		"--security-opt" "apparmor=unconfined"
-	)
-	log "Enabled --codex-mode Docker flags: seccomp=unconfined, SYS_ADMIN, apparmor=unconfined"
-}
-
 configure_codex_mode_paths() {
 	codex_mode=true
 	# Mount Codex config/state directory when available.
@@ -2077,7 +2057,6 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
-	apply_codex_mode_docker_flags
 	apply_codex_docker_sandbox_fallback
 
 	# Check dependencies based on backend
