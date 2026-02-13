@@ -272,6 +272,78 @@ fi
 rm -rf "$AID_TEST_DIR"
 
 #
+# Paths with spaces tests (issue #29)
+#
+
+echo ""
+echo "--- Paths With Spaces (issue #29) ---"
+
+# Setup dirs with spaces
+SPACE_TEST_DIR="$HOME/.sandbox_space_test_$$"
+mkdir -p "$SPACE_TEST_DIR/My Games"
+mkdir -p "$SPACE_TEST_DIR/System Volume Information"
+mkdir -p "$SPACE_TEST_DIR/Read Only Dir"
+echo "secret" >"$SPACE_TEST_DIR/System Volume Information/data.txt"
+echo "game_content" >"$SPACE_TEST_DIR/My Games/save.txt"
+echo "ro_content" >"$SPACE_TEST_DIR/Read Only Dir/file.txt"
+
+echo "Test: --deny with spaces works alongside -w"
+if ./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" -w "$SPACE_TEST_DIR/My Games" \
+	cat "$SPACE_TEST_DIR/System Volume Information/data.txt" 2>/dev/null; then
+	fail "--deny with spaces + -w: denied path was readable"
+else
+	pass "--deny with spaces works alongside -w"
+fi
+
+echo "Test: -w with spaces works alongside --deny"
+if output=$(./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" -w "$SPACE_TEST_DIR/My Games" \
+	cat "$SPACE_TEST_DIR/My Games/save.txt" 2>&1) && [[ "$output" == "game_content" ]]; then
+	pass "-w with spaces works alongside --deny"
+else
+	fail "-w with spaces + --deny: could not read writable path, got '$output'"
+fi
+
+echo "Test: --deny with spaces works alongside --read-only"
+if ./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" --read-only "$SPACE_TEST_DIR/Read Only Dir" \
+	cat "$SPACE_TEST_DIR/System Volume Information/data.txt" 2>/dev/null; then
+	fail "--deny with spaces + --read-only: denied path was readable"
+else
+	pass "--deny with spaces works alongside --read-only"
+fi
+
+echo "Test: --read-only with spaces works alongside --deny"
+if output=$(./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" --read-only "$SPACE_TEST_DIR/Read Only Dir" \
+	cat "$SPACE_TEST_DIR/Read Only Dir/file.txt" 2>&1) && [[ "$output" == "ro_content" ]]; then
+	pass "--read-only with spaces works alongside --deny"
+else
+	fail "--read-only with spaces + --deny: could not read ro path, got '$output'"
+fi
+
+echo "Test: all three flag types with spaces in paths"
+if output=$(./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" \
+	--read-only "$SPACE_TEST_DIR/Read Only Dir" \
+	-w "$SPACE_TEST_DIR/My Games" \
+	sh -c "cat '$SPACE_TEST_DIR/Read Only Dir/file.txt' && echo writable > '$SPACE_TEST_DIR/My Games/new.txt' && cat '$SPACE_TEST_DIR/My Games/new.txt'" 2>&1) &&
+	[[ "$output" == *"ro_content"* ]] && [[ "$output" == *"writable"* ]]; then
+	pass "all three flag types with spaces in paths"
+else
+	fail "all three flag types with spaces: got '$output'"
+fi
+
+echo "Test: --deny still blocks when all three flags have spaces"
+if ./sandbox --deny "$SPACE_TEST_DIR/System Volume Information" \
+	--read-only "$SPACE_TEST_DIR/Read Only Dir" \
+	-w "$SPACE_TEST_DIR/My Games" \
+	cat "$SPACE_TEST_DIR/System Volume Information/data.txt" 2>/dev/null; then
+	fail "--deny still blocks with all three flags: denied path was readable"
+else
+	pass "--deny still blocks when all three flags have spaces"
+fi
+
+# Cleanup
+rm -rf "$SPACE_TEST_DIR"
+
+#
 # Safe mode tests
 #
 
