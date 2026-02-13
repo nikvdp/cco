@@ -122,6 +122,14 @@ get_command() {
 	fi
 }
 
+is_codex_command_selected() {
+	local cmd_str
+	cmd_str=$(get_command)
+	local cmd_array=()
+	read -ra cmd_array <<<"$cmd_str"
+	[[ ${#cmd_array[@]} -gt 0 && "${cmd_array[0]}" == "codex" ]]
+}
+
 codex_args_specify_sandbox() {
 	local args=("$@")
 	local idx
@@ -144,6 +152,10 @@ codex_args_specify_sandbox() {
 
 apply_codex_docker_sandbox_fallback() {
 	if [[ "$codex_mode" != true || "$SANDBOX_BACKEND" != "docker" ]]; then
+		return
+	fi
+
+	if ! is_codex_command_selected; then
 		return
 	fi
 
