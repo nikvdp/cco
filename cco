@@ -188,6 +188,14 @@ apply_codex_mode_docker_flags() {
 	log "Enabled --codex-mode Docker flags: seccomp=unconfined, SYS_ADMIN, apparmor=unconfined"
 }
 
+configure_codex_mode_paths() {
+	codex_mode=true
+	# Mount Codex config/state directory when available.
+	if [[ -d "$HOME/.codex" ]]; then
+		add_rw_path "$HOME/.codex"
+	fi
+}
+
 path_in_array() {
 	local needle="$1"
 	shift
@@ -1660,7 +1668,7 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--codex-mode)
-		codex_mode=true
+		configure_codex_mode_paths
 		shift
 		;;
 	--claude-command)
@@ -1792,11 +1800,7 @@ if [[ $# -gt 0 ]]; then
 	codex)
 		# OpenAI Codex mode - set up the command and add default directory
 		command_flag="codex --dangerously-bypass-approvals-and-sandbox"
-		codex_mode=true
-		# Add ~/.codex to additional directories if it exists
-		if [[ -d "$HOME/.codex" ]]; then
-			additional_dirs+=("$HOME/.codex")
-		fi
+		configure_codex_mode_paths
 		shift
 		# All remaining arguments are passed to codex
 		claude_args=("$@")
