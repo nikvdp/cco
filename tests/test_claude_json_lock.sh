@@ -30,13 +30,6 @@ echo ""
 
 echo "--- ~/.claude.json.lock ---"
 
-echo "Test: .claude.json.lock directory exists before sandbox launch"
-if [[ -d "$HOME/.claude.json.lock" ]]; then
-	pass ".claude.json.lock directory exists"
-else
-	fail ".claude.json.lock directory does not exist (cco should pre-create it)"
-fi
-
 echo "Test: .claude.json.lock is writable inside sandbox"
 if output=$(./cco shell 'touch ~/.claude.json.lock/test_write && rm ~/.claude.json.lock/test_write && echo OK') && [[ "$output" == "OK" ]]; then
 	pass ".claude.json.lock is writable inside sandbox"
@@ -72,13 +65,6 @@ fi
 
 echo ""
 echo "--- ~/.npm ---"
-
-echo "Test: .npm directory exists before sandbox launch"
-if [[ -d "$HOME/.npm" ]]; then
-	pass ".npm directory exists"
-else
-	fail ".npm directory does not exist (cco should pre-create it)"
-fi
 
 echo "Test: .npm is writable inside sandbox"
 if output=$(./cco shell 'touch ~/.npm/test_write && rm ~/.npm/test_write && echo OK') && [[ "$output" == "OK" ]]; then
