@@ -25,7 +25,10 @@ RUN apt-get update && apt-get install -y curl \
     sudo procps \
     # Misc utilities
     tree less file unzip zip \
-    && rm -rf /var/lib/apt/lists/*
+    # Environment management
+    direnv \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo 'eval "$(direnv hook bash)"' >> /etc/bash.bashrc
 
 # Set Rust environment variables (before installation for better caching)
 ENV CARGO_HOME=/opt/cargo \
@@ -106,13 +109,6 @@ RUN if [ -n "$CUSTOM_PACKAGES" ]; then \
 # Copy entrypoint script
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# Install direnv and related environment management tools
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    direnv \
-    && rm -rf /var/lib/apt/lists/* \
-    && echo 'eval "$(direnv hook bash)"' >> /etc/bash.bashrc
 
 # Install CLI coding agents (always fetch latest versions)
 ARG CACHE_BUST=default
