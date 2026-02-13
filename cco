@@ -122,6 +122,40 @@ get_command() {
 	fi
 }
 
+codex_args_specify_sandbox() {
+	local args=("$@")
+	local idx
+	for ((idx = 0; idx < ${#args[@]}; idx++)); do
+		local arg="${args[$idx]}"
+		case "$arg" in
+		-s | --sandbox | --sandbox=*)
+			return 0
+			;;
+		-c | --config)
+			local next="${args[$((idx + 1))]:-}"
+			if [[ "$next" == sandbox_mode=* ]]; then
+				return 0
+			fi
+			;;
+		esac
+	done
+	return 1
+}
+
+apply_codex_docker_sandbox_fallback() {
+	if [[ "$codex_mode" != true || "$SANDBOX_BACKEND" != "docker" ]]; then
+		return
+	fi
+
+	if codex_args_specify_sandbox "${claude_args[@]}"; then
+		log "Codex sandbox mode explicitly provided; leaving as-is"
+		return
+	fi
+
+	claude_args=("--sandbox" "danger-full-access" "${claude_args[@]}")
+	log "Added Codex fallback argument '--sandbox danger-full-access' for Docker backend"
+}
+
 path_in_array() {
 	local needle="$1"
 	shift
@@ -1516,6 +1550,7 @@ safe_mode=false
 force_bridge_network=false
 claude_command_flag=""
 command_flag=""
+codex_mode=false
 
 # Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
 if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
@@ -1721,6 +1756,7 @@ if [[ $# -gt 0 ]]; then
 	codex)
 		# OpenAI Codex mode - set up the command and add default directory
 		command_flag="codex --dangerously-bypass-approvals-and-sandbox"
+		codex_mode=true
 		# Add ~/.codex to additional directories if it exists
 		if [[ -d "$HOME/.codex" ]]; then
 			additional_dirs+=("$HOME/.codex")
@@ -1918,6 +1954,7 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
+	apply_codex_docker_sandbox_fallback
 
 	# Check dependencies based on backend
 	check_dependencies
