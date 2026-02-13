@@ -4,7 +4,7 @@
 #
 # These test the pure bash array logic (no sandbox needed).
 
-set -euo pipefail
+set -eo pipefail
 
 cd "$(dirname "$0")/.."
 
@@ -34,14 +34,15 @@ mkdir -p "$TEST_DIR/Read Only Dir"
 
 # Source the functions we need from cco.
 # We extract them rather than sourcing the whole file to avoid side effects.
-# shellcheck disable=SC1090
-source <(sed -n '
+# Use eval instead of source <(...) for bash 3.2 compatibility (macOS).
+# shellcheck disable=SC1090,SC2046
+eval "$(sed -n '
   /^path_in_array()/,/^}/p
-  /^remove_from_array()/,/^}/p
+  /^remove_path_from_array()/,/^}/p
   /^add_rw_path()/,/^}/p
   /^add_ro_path()/,/^}/p
   /^add_deny_path()/,/^}/p
-' cco)
+' cco)"
 
 # Source the warn helper too
 warn() { :; }

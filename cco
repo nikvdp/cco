@@ -133,18 +133,19 @@ path_in_array() {
 	return 1
 }
 
-remove_from_array() {
-	local -n _arr_ref="$1"
-	local target="$2"
+remove_path_from_array() {
+	local target="$1"
+	shift
 	local new_arr=()
 
-	for element in "${_arr_ref[@]}"; do
+	for element in "$@"; do
 		if [[ "$element" != "$target" ]]; then
 			new_arr+=("$element")
 		fi
 	done
 
-	_arr_ref=("${new_arr[@]}")
+	# Use newline delimiter (not space) so paths with spaces survive round-trip
+	printf '%s\n' "${new_arr[@]}"
 }
 
 # Resolve a path to an absolute form, tolerating files or directories that may not yet exist.
@@ -184,8 +185,8 @@ add_rw_path() {
 		warn "Directory does not exist: $path"
 		return 1
 	fi
-	remove_from_array additional_ro_paths "$path"
-	remove_from_array deny_paths "$path"
+	IFS=$'\n' read -r -d '' -a additional_ro_paths < <(remove_path_from_array "$path" "${additional_ro_paths[@]}") || true
+	IFS=$'\n' read -r -d '' -a deny_paths < <(remove_path_from_array "$path" "${deny_paths[@]}") || true
 	if ! path_in_array "$path" "${additional_dirs[@]}"; then
 		additional_dirs+=("$path")
 	fi
@@ -198,8 +199,8 @@ add_ro_path() {
 		warn "Path does not exist for read-only share: $path"
 		return 1
 	fi
-	remove_from_array additional_dirs "$path"
-	remove_from_array deny_paths "$path"
+	IFS=$'\n' read -r -d '' -a additional_dirs < <(remove_path_from_array "$path" "${additional_dirs[@]}") || true
+	IFS=$'\n' read -r -d '' -a deny_paths < <(remove_path_from_array "$path" "${deny_paths[@]}") || true
 	if ! path_in_array "$path" "${additional_ro_paths[@]}"; then
 		additional_ro_paths+=("$path")
 	fi
@@ -212,8 +213,8 @@ add_deny_path() {
 		warn "Path does not exist for deny rule: $path"
 		return 1
 	fi
-	remove_from_array additional_dirs "$path"
-	remove_from_array additional_ro_paths "$path"
+	IFS=$'\n' read -r -d '' -a additional_dirs < <(remove_path_from_array "$path" "${additional_dirs[@]}") || true
+	IFS=$'\n' read -r -d '' -a additional_ro_paths < <(remove_path_from_array "$path" "${additional_ro_paths[@]}") || true
 	if ! path_in_array "$path" "${deny_paths[@]}"; then
 		deny_paths+=("$path")
 	fi
