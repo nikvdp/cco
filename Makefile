@@ -1,4 +1,4 @@
-.PHONY: help test test-install clean format lint
+.PHONY: help test smoke-test test-install clean format lint
 
 # Auto-discover tracked shell scripts (intersection of shfmt -f and git ls-files)
 SHELL_FILES = $(shell shfmt -f . | while read -r f; do git ls-files --error-unmatch "$$f" >/dev/null 2>&1 && echo "$$f"; done)
@@ -8,6 +8,7 @@ help:
 	@echo "cco Development Tasks"
 	@echo ""
 	@echo "  test          Run all tests (platform-specific tests auto-skip)"
+	@echo "  smoke-test    Run all smoke tests (tests/smoke_*.sh)"
 	@echo "  format        Format all shell scripts with shfmt"
 	@echo "  lint          Lint all shell scripts with shellcheck"
 	@echo "  test-install  Test curl | bash installer (starts server, tests, cleans up)"
@@ -33,6 +34,25 @@ test:
 	fi
 	@echo ""
 	@echo "All test suites passed."
+
+# Run smoke tests (manual/integration checks)
+smoke-test:
+	@found=0; \
+	for t in tests/smoke_*.sh; do \
+		if [ ! -f "$$t" ]; then \
+			continue; \
+		fi; \
+		found=1; \
+		echo ""; \
+		echo "========== $$t =========="; \
+		bash "$$t" || exit 1; \
+	done; \
+	if [ "$$found" -eq 0 ]; then \
+		echo "No smoke tests found (expected files matching tests/smoke_*.sh)."; \
+		exit 1; \
+	fi
+	@echo ""
+	@echo "All smoke tests passed."
 
 # Format shell scripts
 format:
