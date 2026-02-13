@@ -196,6 +196,77 @@ configure_codex_mode_paths() {
 	fi
 }
 
+create_codex_mode_shim_dir() {
+	local shim_dir
+	shim_dir=$(mktemp -d "${TMPDIR:-/tmp}/cco-codex-shim.XXXXXX")
+
+	cat >"$shim_dir/codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real_codex=""
+IFS=':' read -r -a path_parts <<<"${PATH:-}"
+for dir in "${path_parts[@]}"; do
+	[[ -z "$dir" || "$dir" == "$self_dir" ]] && continue
+	if [[ -x "$dir/codex" ]]; then
+		real_codex="$dir/codex"
+		break
+	fi
+done
+
+if [[ -z "$real_codex" ]]; then
+	echo "cco codex-mode shim: could not locate real codex in PATH" >&2
+	exit 127
+fi
+
+filtered_args=()
+saw_bypass=false
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--dangerously-bypass-approvals-and-sandbox)
+		saw_bypass=true
+		shift
+		;;
+	-s | --sandbox)
+		shift
+		[[ $# -gt 0 ]] && shift
+		;;
+	--sandbox=*)
+		shift
+		;;
+	-c | --config)
+		if [[ $# -gt 1 && "$2" == sandbox_mode=* ]]; then
+			shift 2
+		else
+			filtered_args+=("$1")
+			shift
+			if [[ $# -gt 0 ]]; then
+				filtered_args+=("$1")
+				shift
+			fi
+		fi
+		;;
+	*)
+		filtered_args+=("$1")
+		shift
+		;;
+	esac
+done
+
+cmd=("$real_codex")
+if [[ "$saw_bypass" != true ]]; then
+	cmd+=("--dangerously-bypass-approvals-and-sandbox")
+fi
+cmd+=("${filtered_args[@]}")
+exec "${cmd[@]}"
+EOF
+
+	chmod +x "$shim_dir/codex"
+	echo "$shim_dir"
+}
+
 path_in_array() {
 	local needle="$1"
 	shift
@@ -1089,6 +1160,17 @@ run_container() {
 			fi
 		done
 	}
+
+	# In codex mode, mount a PATH shim so nested `codex` calls run with
+	# bypass mode inside cco's outer sandbox.
+	if [[ "$codex_mode" == true ]]; then
+		local codex_shim_dir
+		codex_shim_dir=$(create_codex_mode_shim_dir)
+		docker_cleanup_paths+=("$codex_shim_dir")
+		docker_args+=(-v "$codex_shim_dir":"$codex_shim_dir":ro)
+		docker_args+=(-e "CCO_PREPEND_PATH=$codex_shim_dir")
+		log "Enabled codex-mode PATH shim for nested codex invocations"
+	fi
 
 	# Apply read-only mounts
 	for ro_path in "${additional_ro_paths[@]}"; do
