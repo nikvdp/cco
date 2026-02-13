@@ -15,12 +15,22 @@ help:
 	@echo "  help          Show this help message"
 
 # Run all tests (platform-specific tests auto-skip on wrong OS)
+# On macOS, also run with /bin/bash (3.2) to catch bashism compatibility issues
 test:
 	@for t in tests/test_*.sh; do \
 		echo ""; \
 		echo "========== $$t =========="; \
 		bash "$$t" || exit 1; \
 	done
+	@if [ "$$(uname -s)" = "Darwin" ] && [ "/bin/bash" != "$$(which bash)" ]; then \
+		echo ""; \
+		echo "===== Re-running tests with /bin/bash (bash 3.2) ====="; \
+		for t in tests/test_*.sh; do \
+			echo ""; \
+			echo "========== $$t [bash 3.2] =========="; \
+			/bin/bash "$$t" || exit 1; \
+		done; \
+	fi
 	@echo ""
 	@echo "All test suites passed."
 
