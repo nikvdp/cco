@@ -30,11 +30,8 @@ jobs:
           echo "Actual: $(uname -m)"
           test "$(uname -m)" = "${{ matrix.arch }}"
 
-      - name: Run cross-platform sandbox tests
-        run: ./tests/test_sandbox.sh
-
-      - name: Run Linux seccomp tests
-        run: ./tests/test_seccomp.sh
+      - name: Run all tests
+        run: make test
 
   test-macos:
     runs-on: macos-14
@@ -43,5 +40,5 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run cross-platform sandbox tests
-        run: ./tests/test_sandbox.sh
+      - name: Run all tests
+        run: make test

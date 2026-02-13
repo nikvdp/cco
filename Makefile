@@ -1,4 +1,4 @@
-.PHONY: help test-install clean format lint
+.PHONY: help test test-install clean format lint
 
 # Auto-discover tracked shell scripts (intersection of shfmt -f and git ls-files)
 SHELL_FILES := $(shell shfmt -f . | while read -r f; do git ls-files --error-unmatch "$$f" >/dev/null 2>&1 && echo "$$f"; done)
@@ -7,11 +7,22 @@ SHELL_FILES := $(shell shfmt -f . | while read -r f; do git ls-files --error-unm
 help:
 	@echo "cco Development Tasks"
 	@echo ""
+	@echo "  test          Run all tests (platform-specific tests auto-skip)"
 	@echo "  format        Format all shell scripts with shfmt"
 	@echo "  lint          Lint all shell scripts with shellcheck"
 	@echo "  test-install  Test curl | bash installer (starts server, tests, cleans up)"
 	@echo "  clean         Clean up test files"
 	@echo "  help          Show this help message"
+
+# Run all tests (platform-specific tests auto-skip on wrong OS)
+test:
+	@for t in tests/test_*.sh; do \
+		echo ""; \
+		echo "========== $$t =========="; \
+		bash "$$t" || exit 1; \
+	done
+	@echo ""
+	@echo "All test suites passed."
 
 # Format shell scripts
 format:
