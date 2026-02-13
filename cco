@@ -144,8 +144,8 @@ remove_path_from_array() {
 		fi
 	done
 
-	# Return the array as a space-separated string
-	echo "${new_arr[*]}"
+	# Use newline delimiter (not space) so paths with spaces survive round-trip
+	printf '%s\n' "${new_arr[@]}"
 }
 
 # Resolve a path to an absolute form, tolerating files or directories that may not yet exist.
@@ -185,8 +185,8 @@ add_rw_path() {
 		warn "Directory does not exist: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
-	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=$'\n' read -r -d '' -a additional_ro_paths < <(remove_path_from_array "$path" "${additional_ro_paths[@]}") || true
+	IFS=$'\n' read -r -d '' -a deny_paths < <(remove_path_from_array "$path" "${deny_paths[@]}") || true
 	if ! path_in_array "$path" "${additional_dirs[@]}"; then
 		additional_dirs+=("$path")
 	fi
@@ -199,8 +199,8 @@ add_ro_path() {
 		warn "Path does not exist for read-only share: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a deny_paths <<<"$(remove_path_from_array "$path" "${deny_paths[@]}")"
+	IFS=$'\n' read -r -d '' -a additional_dirs < <(remove_path_from_array "$path" "${additional_dirs[@]}") || true
+	IFS=$'\n' read -r -d '' -a deny_paths < <(remove_path_from_array "$path" "${deny_paths[@]}") || true
 	if ! path_in_array "$path" "${additional_ro_paths[@]}"; then
 		additional_ro_paths+=("$path")
 	fi
@@ -213,8 +213,8 @@ add_deny_path() {
 		warn "Path does not exist for deny rule: $path"
 		return 1
 	fi
-	IFS=' ' read -r -a additional_dirs <<<"$(remove_path_from_array "$path" "${additional_dirs[@]}")"
-	IFS=' ' read -r -a additional_ro_paths <<<"$(remove_path_from_array "$path" "${additional_ro_paths[@]}")"
+	IFS=$'\n' read -r -d '' -a additional_dirs < <(remove_path_from_array "$path" "${additional_dirs[@]}") || true
+	IFS=$'\n' read -r -d '' -a additional_ro_paths < <(remove_path_from_array "$path" "${additional_ro_paths[@]}") || true
 	if ! path_in_array "$path" "${deny_paths[@]}"; then
 		deny_paths+=("$path")
 	fi
