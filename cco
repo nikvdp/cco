@@ -156,6 +156,26 @@ apply_codex_docker_sandbox_fallback() {
 	log "Added Codex fallback argument '--sandbox danger-full-access' for Docker backend"
 }
 
+apply_codex_mode_docker_flags() {
+	if [[ "$codex_mode" != true ]]; then
+		return
+	fi
+
+	if [[ "$SANDBOX_BACKEND" != "docker" ]]; then
+		warn "--codex-mode is only supported with Docker backend; ignoring extra Docker flags"
+		return
+	fi
+
+	# Codex docs recommend these in some containerized environments where
+	# seccomp/AppArmor restrictions can break Codex's Linux sandbox setup.
+	sandbox_extra_args+=(
+		"--security-opt" "seccomp=unconfined"
+		"--cap-add" "SYS_ADMIN"
+		"--security-opt" "apparmor=unconfined"
+	)
+	log "Enabled --codex-mode Docker flags: seccomp=unconfined, SYS_ADMIN, apparmor=unconfined"
+}
+
 path_in_array() {
 	local needle="$1"
 	shift
@@ -1627,6 +1647,10 @@ while [[ $# -gt 0 ]]; do
 		safe_mode=true
 		shift
 		;;
+	--codex-mode)
+		codex_mode=true
+		shift
+		;;
 	--claude-command)
 		if [[ $# -lt 2 ]]; then
 			error "--claude-command requires an argument (command to use instead of 'claude')"
@@ -1899,6 +1923,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --packages, -p PKG    Install additional apt packages"
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
+		echo "  --codex-mode          Add Docker runtime flags for Codex compatibility"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
@@ -1954,6 +1979,7 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
+	apply_codex_mode_docker_flags
 	apply_codex_docker_sandbox_fallback
 
 	# Check dependencies based on backend
