@@ -73,4 +73,8 @@ for arg in "$@"; do
 done
 
 # Set HOME environment variable and run command (preserve working directory)
-exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && $cmd"
+if [ -n "${CCO_PREPEND_PATH:-}" ]; then
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$CCO_PREPEND_PATH':\$PATH && $cmd"
+else
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && $cmd"
+fi

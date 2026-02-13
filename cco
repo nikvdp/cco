@@ -122,6 +122,151 @@ get_command() {
 	fi
 }
 
+is_codex_command_selected() {
+	local cmd_str
+	cmd_str=$(get_command)
+	local cmd_array=()
+	read -ra cmd_array <<<"$cmd_str"
+	[[ ${#cmd_array[@]} -gt 0 && "${cmd_array[0]}" == "codex" ]]
+}
+
+codex_args_specify_sandbox() {
+	local args=("$@")
+	local idx
+	for ((idx = 0; idx < ${#args[@]}; idx++)); do
+		local arg="${args[$idx]}"
+		case "$arg" in
+		-s | --sandbox | --sandbox=*)
+			return 0
+			;;
+		-c | --config)
+			local next="${args[$((idx + 1))]:-}"
+			if [[ "$next" == sandbox_mode=* ]]; then
+				return 0
+			fi
+			;;
+		esac
+	done
+	return 1
+}
+
+apply_codex_docker_sandbox_fallback() {
+	if [[ "$codex_mode" != true || "$SANDBOX_BACKEND" != "docker" ]]; then
+		return
+	fi
+
+	if ! is_codex_command_selected; then
+		return
+	fi
+
+	if codex_args_specify_sandbox "${claude_args[@]}"; then
+		log "Codex sandbox mode explicitly provided; leaving as-is"
+		return
+	fi
+
+	claude_args=("--sandbox" "danger-full-access" "${claude_args[@]}")
+	log "Added Codex fallback argument '--sandbox danger-full-access' for Docker backend"
+}
+
+apply_codex_mode_docker_flags() {
+	if [[ "$codex_mode" != true ]]; then
+		return
+	fi
+
+	if [[ "$SANDBOX_BACKEND" != "docker" ]]; then
+		warn "--codex-mode is only supported with Docker backend; ignoring extra Docker flags"
+		return
+	fi
+
+	# Codex docs recommend these in some containerized environments where
+	# seccomp/AppArmor restrictions can break Codex's Linux sandbox setup.
+	sandbox_extra_args+=(
+		"--security-opt" "seccomp=unconfined"
+		"--cap-add" "SYS_ADMIN"
+		"--security-opt" "apparmor=unconfined"
+	)
+	log "Enabled --codex-mode Docker flags: seccomp=unconfined, SYS_ADMIN, apparmor=unconfined"
+}
+
+configure_codex_mode_paths() {
+	codex_mode=true
+	# Mount Codex config/state directory when available.
+	if [[ -d "$HOME/.codex" ]]; then
+		add_rw_path "$HOME/.codex"
+	fi
+}
+
+create_codex_mode_shim_dir() {
+	local shim_dir
+	shim_dir=$(mktemp -d "${TMPDIR:-/tmp}/cco-codex-shim.XXXXXX")
+
+	cat >"$shim_dir/codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+real_codex=""
+IFS=':' read -r -a path_parts <<<"${PATH:-}"
+for dir in "${path_parts[@]}"; do
+	[[ -z "$dir" || "$dir" == "$self_dir" ]] && continue
+	if [[ -x "$dir/codex" ]]; then
+		real_codex="$dir/codex"
+		break
+	fi
+done
+
+if [[ -z "$real_codex" ]]; then
+	echo "cco codex-mode shim: could not locate real codex in PATH" >&2
+	exit 127
+fi
+
+filtered_args=()
+saw_bypass=false
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--dangerously-bypass-approvals-and-sandbox)
+		saw_bypass=true
+		shift
+		;;
+	-s | --sandbox)
+		shift
+		[[ $# -gt 0 ]] && shift
+		;;
+	--sandbox=*)
+		shift
+		;;
+	-c | --config)
+		if [[ $# -gt 1 && "$2" == sandbox_mode=* ]]; then
+			shift 2
+		else
+			filtered_args+=("$1")
+			shift
+			if [[ $# -gt 0 ]]; then
+				filtered_args+=("$1")
+				shift
+			fi
+		fi
+		;;
+	*)
+		filtered_args+=("$1")
+		shift
+		;;
+	esac
+done
+
+cmd=("$real_codex")
+if [[ "$saw_bypass" != true ]]; then
+	cmd+=("--dangerously-bypass-approvals-and-sandbox")
+fi
+cmd+=("${filtered_args[@]}")
+exec "${cmd[@]}"
+EOF
+
+	chmod +x "$shim_dir/codex"
+	echo "$shim_dir"
+}
+
 path_in_array() {
 	local needle="$1"
 	shift
@@ -1016,6 +1161,17 @@ run_container() {
 		done
 	}
 
+	# In codex mode, mount a PATH shim so nested `codex` calls run with
+	# bypass mode inside cco's outer sandbox.
+	if [[ "$codex_mode" == true ]]; then
+		local codex_shim_dir
+		codex_shim_dir=$(create_codex_mode_shim_dir)
+		docker_cleanup_paths+=("$codex_shim_dir")
+		docker_args+=(-v "$codex_shim_dir":"$codex_shim_dir":ro)
+		docker_args+=(-e "CCO_PREPEND_PATH=$codex_shim_dir")
+		log "Enabled codex-mode PATH shim for nested codex invocations"
+	fi
+
 	# Apply read-only mounts
 	for ro_path in "${additional_ro_paths[@]}"; do
 		if [[ -d "$ro_path" ]]; then
@@ -1516,6 +1672,7 @@ safe_mode=false
 force_bridge_network=false
 claude_command_flag=""
 command_flag=""
+codex_mode=false
 
 # Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
 if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
@@ -1590,6 +1747,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--safe)
 		safe_mode=true
+		shift
+		;;
+	--codex-mode)
+		configure_codex_mode_paths
 		shift
 		;;
 	--claude-command)
@@ -1721,10 +1882,7 @@ if [[ $# -gt 0 ]]; then
 	codex)
 		# OpenAI Codex mode - set up the command and add default directory
 		command_flag="codex --dangerously-bypass-approvals-and-sandbox"
-		# Add ~/.codex to additional directories if it exists
-		if [[ -d "$HOME/.codex" ]]; then
-			additional_dirs+=("$HOME/.codex")
-		fi
+		configure_codex_mode_paths
 		shift
 		# All remaining arguments are passed to codex
 		claude_args=("$@")
@@ -1863,6 +2021,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --packages, -p PKG    Install additional apt packages"
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
+		echo "  --codex-mode          Add Docker runtime flags for Codex compatibility"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
@@ -1918,6 +2077,8 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
+	apply_codex_mode_docker_flags
+	apply_codex_docker_sandbox_fallback
 
 	# Check dependencies based on backend
 	check_dependencies
