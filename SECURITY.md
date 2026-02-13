@@ -211,6 +211,27 @@ You can verify the protection is working:
 
 **Recommendation**: Avoid this flag unless you fully trust the workload and require nested Docker access. Use a separate, constrained Docker context if possible.
 
+### Codex Compatibility Mode (`--codex-mode`)
+**Purpose**: Add Docker runtime flags for compatibility with Codex in containerized environments.
+
+When enabled (Docker backend only), `cco` appends:
+- `--security-opt seccomp=unconfined`
+- `--cap-add SYS_ADMIN`
+- `--security-opt apparmor=unconfined`
+
+**Security Implications**:
+- **Weaker syscall confinement**: `seccomp=unconfined` removes seccomp filtering for the container.
+- **Major privilege expansion**: `CAP_SYS_ADMIN` is a broad Linux capability often described as "the new root."
+- **Disabled LSM confinement**: `apparmor=unconfined` disables AppArmor policy enforcement.
+- **Larger breakout blast radius**: If tooling inside the container is compromised, these flags make containment significantly weaker than default Docker settings.
+
+**Recommendation**:
+- Use `--codex-mode` only when needed for Codex compatibility issues in Docker.
+- Do not combine it with other high-risk flags (for example `--privileged` or broad host mounts) unless you explicitly accept near-unsandboxed behavior.
+- Prefer native backend or default Docker settings when compatibility allows.
+
+**Risk Assessment**: **HIGH** - This mode intentionally reduces multiple Docker isolation layers. It is safer than full `--privileged` in most setups, but materially less safe than default `cco` Docker mode.
+
 ### OAuth Token Refresh (`--allow-oauth-refresh`)
 **Purpose**: Allows Claude to refresh expired OAuth tokens and sync them back to the host system.
 
