@@ -1119,7 +1119,10 @@ run_container() {
 	# so agents can find their config dirs (e.g. ~/.codex → /home/hostuser/.codex)
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
-			if [[ "$dir" == "$HOME"/* ]]; then
+			if [[ -n "$git_worktree_common_dir" && "$dir" == "$git_worktree_common_dir" ]]; then
+				docker_args+=(-v "$dir":"$dir")
+				log "Mounting additional directory: $dir"
+			elif [[ "$dir" == "$HOME"/* ]]; then
 				local relative="${dir#"$HOME"/}"
 				local container_dir="$container_home/$relative"
 				docker_args+=(-v "$dir":"$container_dir")
@@ -1641,6 +1644,7 @@ deny_paths=()
 custom_env_vars=()
 custom_packages=()
 sandbox_extra_args=()
+git_worktree_common_dir=""
 docker_access=false
 allow_oauth_refresh=false
 allow_keychain=false
@@ -2127,6 +2131,7 @@ main() {
 			git_common_dir="$(cd "$git_common_dir" && pwd)"
 			if [[ "$git_common_dir" != "$PWD"/.git ]]; then
 				additional_dirs+=("$git_common_dir")
+				git_worktree_common_dir="$git_common_dir"
 				log "Adding git common dir for worktree support: $git_common_dir"
 			fi
 		fi
