@@ -49,7 +49,7 @@ assert_contains() {
 	local file="$1"
 	local expected="$2"
 	local name="$3"
-	if rg -Fq -- "$expected" "$file"; then
+	if grep -Fq -- "$expected" "$file"; then
 		pass "$name"
 	else
 		echo "  expected to find: $expected"
@@ -63,7 +63,7 @@ assert_not_contains() {
 	local file="$1"
 	local unexpected="$2"
 	local name="$3"
-	if rg -Fq -- "$unexpected" "$file"; then
+	if grep -Fq -- "$unexpected" "$file"; then
 		echo "  unexpected content found: $unexpected"
 		echo "  output:"
 		sed 's/^/    /' "$file"
