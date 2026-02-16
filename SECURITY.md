@@ -158,6 +158,7 @@ Claude Code runs directly on the host system with full user privileges:
 - Use `--allow-readonly PATH` to share specific files/directories read-only without granting write access.
 - Use `--deny-path PATH` to hide a path entirely (appears empty/blocked inside the sandbox). In Docker/bubblewrap this is implemented with empty overlays; in Seatbelt it raises access errors.
 - `--add-dir PATH[:ro|:rw]` lets you control permissions inline when mounting additional content.
+- Git worktree support auto-detects `git rev-parse --git-common-dir` only for trusted git layouts. Use `--disable-git-worktree-common-dir` if you want fully manual control and no auto-added git paths.
 
 ## Terminal Injection Attacks (Linux)
 
@@ -323,6 +324,20 @@ cco -- -e DEBUG=1
 - Protect `CCO_SANDBOX_ARGS_FILE` with appropriate filesystem permissions
 
 **Risk Assessment**: **Low** for normal use (port forwarding, env vars). **HIGH** if misused with privileged flags. This feature trusts the user to understand what they're passing to the sandbox backend.
+
+### External Git Common Dir Override (`--allow-external-git-dir`)
+**Purpose**: Allow `cco` to mount a git common dir even when git metadata indicates a non-standard layout.
+
+**Security Implications**:
+- **Wider writable scope**: Can grant write access to a `.git` directory outside the normal worktree/main-repo structure.
+- **Trust assumption**: You are explicitly trusting local git metadata and repository setup.
+
+**Mitigation**:
+- Disabled by default; only trusted layouts are auto-allowed.
+- Explicit opt-in required via `--allow-external-git-dir` (or `CCO_ALLOW_EXTERNAL_GIT_DIR=1`).
+- Use `--disable-git-worktree-common-dir` for strict manual mounts only.
+
+**Risk Assessment**: **Medium** when enabled on untrusted or unknown local repos. **Low** in trusted single-user workflows.
 
 ### Recommendation
 These experimental features are disabled by default. Only enable them if you understand the additional security implications and have implemented appropriate safeguards (regular backups, monitoring, etc.).
