@@ -26,3 +26,11 @@ docker run --rm --privileged \
 	-w /cco \
 	"$IMAGE_NAME" \
 	bash tests/test_seccomp.sh
+
+echo ""
+echo "Running git worktree support tests..."
+docker run --rm --privileged \
+	-v "$(pwd):/cco" \
+	-w /cco \
+	"$IMAGE_NAME" \
+	bash tests/test_git_worktree_support.sh

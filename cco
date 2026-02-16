@@ -304,6 +304,18 @@ resolve_path() {
 	fi
 }
 
+resolve_existing_dir() {
+	local input="$1"
+	local expanded="$input"
+	if [[ "$expanded" == ~* ]]; then
+		expanded="${expanded/#\~/$HOME}"
+	fi
+	if [[ ! -d "$expanded" ]]; then
+		return 1
+	fi
+	(cd "$expanded" && pwd -P)
+}
+
 add_rw_path() {
 	local path="$1"
 	if [[ ! -d "$path" ]]; then
@@ -927,21 +939,6 @@ run_native_sandbox() {
 	# Always allow writes to current project directory
 	sandbox_rules+=("--write" "$current_dir")
 
-	# If inside a git worktree, the actual .git object store may be in a
-	# different directory (the main repo). Whitelist it so git commits work.
-	if command -v git &>/dev/null && git rev-parse --git-common-dir &>/dev/null 2>&1; then
-		local git_common_dir
-		git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"
-		if [[ -n "$git_common_dir" ]]; then
-			# Resolve to absolute path
-			git_common_dir="$(cd "$git_common_dir" && pwd)"
-			if [[ "$git_common_dir" != "$current_dir"/.git ]]; then
-				sandbox_rules+=("--write" "$git_common_dir")
-				log "Adding git common dir for worktree support: $git_common_dir"
-			fi
-		fi
-	fi
-
 	# Add any additional directories specified with --add-dir
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
@@ -1129,26 +1126,15 @@ run_container() {
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
 
-	# If inside a git worktree, mount the main repo's .git directory so
-	# git commits work (the object store lives in the main repo, not the worktree).
-	if command -v git &>/dev/null && git rev-parse --git-common-dir &>/dev/null 2>&1; then
-		local git_common_dir
-		git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"
-		if [[ -n "$git_common_dir" ]]; then
-			git_common_dir="$(cd "$git_common_dir" && pwd)"
-			if [[ "$git_common_dir" != "$current_dir"/.git ]]; then
-				docker_args+=(-v "$git_common_dir":"$git_common_dir")
-				log "Mounting git common dir for worktree support: $git_common_dir"
-			fi
-		fi
-	fi
-
 	# Mount any additional directories specified with --add-dir
 	# Remap $HOME-relative paths to $container_home inside the container
 	# so agents can find their config dirs (e.g. ~/.codex → /home/hostuser/.codex)
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
-			if [[ "$dir" == "$HOME"/* ]]; then
+			if [[ -n "$git_worktree_common_dir" && "$dir" == "$git_worktree_common_dir" ]]; then
+				docker_args+=(-v "$dir":"$dir")
+				log "Mounting additional directory: $dir"
+			elif [[ "$dir" == "$HOME"/* ]]; then
 				local relative="${dir#"$HOME"/}"
 				local container_dir="$container_home/$relative"
 				docker_args+=(-v "$dir":"$container_dir")
@@ -1670,6 +1656,7 @@ deny_paths=()
 custom_env_vars=()
 custom_packages=()
 sandbox_extra_args=()
+git_worktree_common_dir=""
 docker_access=false
 allow_oauth_refresh=false
 allow_keychain=false
@@ -1679,9 +1666,15 @@ pull_image=false
 shell_mode=false
 safe_mode=false
 force_bridge_network=false
+allow_external_git_dir=false
+enable_git_worktree_common_dir=true
 claude_command_flag=""
 command_flag=""
 codex_mode=false
+
+if [[ "${CCO_ALLOW_EXTERNAL_GIT_DIR:-}" == "1" ]]; then
+	allow_external_git_dir=true
+fi
 
 # Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
 if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
@@ -1760,6 +1753,14 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--codex-mode)
 		configure_codex_mode_paths
+		shift
+		;;
+	--allow-external-git-dir)
+		allow_external_git_dir=true
+		shift
+		;;
+	--disable-git-worktree-common-dir)
+		enable_git_worktree_common_dir=false
 		shift
 		;;
 	--claude-command)
@@ -2031,6 +2032,10 @@ if [[ $# -gt 0 ]]; then
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
 		echo "  --codex-mode          Add Docker runtime flags for Codex compatibility"
+		echo "  --allow-external-git-dir"
+		echo "                        Trust and mount git common dirs outside normal layouts"
+		echo "  --disable-git-worktree-common-dir"
+		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
@@ -2055,6 +2060,8 @@ if [[ $# -gt 0 ]]; then
 		echo "Environment Variables:"
 		echo "  CCO_CLAUDE_COMMAND    Alternative Claude command"
 		echo "  CCO_COMMAND           Arbitrary command (overrides CCO_CLAUDE_COMMAND)"
+		echo "  CCO_ALLOW_EXTERNAL_GIT_DIR=1"
+		echo "                        Trust external git common dirs for worktree support"
 		echo "  CCO_SANDBOX_ARGS_FILE Persistent sandbox args file (one arg per line)"
 		echo "  ANTHROPIC_API_KEY     Passed through automatically"
 		echo "  OPENAI_API_KEY        Passed through automatically"
@@ -2144,6 +2151,45 @@ main() {
 		else
 			log "Using existing cco image"
 		fi
+	fi
+
+	# If inside a git worktree, the object store lives in the main repo's
+	# .git directory, not the worktree. Add it as an additional dir so both
+	# sandbox backends whitelist it for writes automatically.
+	if [[ "$enable_git_worktree_common_dir" == true ]] && command -v git &>/dev/null; then
+		local git_common_dir_raw git_dir_raw git_common_dir git_dir
+		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
+		git_dir_raw="$(git rev-parse --git-dir 2>/dev/null)" || true
+
+		if [[ -n "$git_common_dir_raw" && -n "$git_dir_raw" ]]; then
+			if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+				if git_dir="$(resolve_existing_dir "$git_dir_raw")"; then
+					local trusted_layout=false
+					if [[ "$git_dir" == "$git_common_dir" ]]; then
+						trusted_layout=true
+					elif [[ "$git_dir" == "$git_common_dir"/worktrees/* ]]; then
+						trusted_layout=true
+					fi
+
+					if [[ "$trusted_layout" == true || "$allow_external_git_dir" == true ]]; then
+						if [[ "$git_common_dir" != "$PWD"/.git ]] && ! path_in_array "$git_common_dir" "${additional_dirs[@]}"; then
+							additional_dirs+=("$git_common_dir")
+							git_worktree_common_dir="$git_common_dir"
+							log "Adding git common dir for worktree support: $git_common_dir"
+						fi
+					else
+						warn "Skipping untrusted git common dir layout: $git_common_dir"
+						warn "Use --allow-external-git-dir (or CCO_ALLOW_EXTERNAL_GIT_DIR=1) to allow it"
+					fi
+				else
+					warn "Skipping git common dir: unable to resolve git dir path: $git_dir_raw"
+				fi
+			else
+				warn "Skipping git common dir: unable to resolve path: $git_common_dir_raw"
+			fi
+		fi
+	elif [[ "$enable_git_worktree_common_dir" == false ]]; then
+		log "Git worktree common-dir auto-detection disabled by flag"
 	fi
 
 	# Run with appropriate backend

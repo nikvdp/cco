@@ -3,7 +3,9 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bubblewrap \
     gcc \
+    git \
     libc6-dev \
+    ripgrep \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /cco
