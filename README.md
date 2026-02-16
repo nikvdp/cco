@@ -63,6 +63,7 @@ You should barely notice `cco` is there, except for that reassuring feeling of s
 - **Native sandbox (preferred)**: Lightweight, fast startup, direct Keychain access on macOS. Exposes host filesystem read-only by default.
 - **Docker sandbox (fallback)**: Stronger filesystem isolation with container-only filesystem when native tools unavailable
 - **Host file access**: Your project files are accessible so Claude can read and edit them
+- **Git worktree support**: Automatically detects git worktrees and whitelists the main repo's `.git` directory so git operations work seamlessly
 - **Network access**: Full host network access for localhost development servers, MCP servers, and web requests
 - **Credential management**: Authentication is handled securely without exposing host credentials
 - **Enhanced features**: Background tasks enabled by default for improved code analysis and autonomous development (Docker mode)
