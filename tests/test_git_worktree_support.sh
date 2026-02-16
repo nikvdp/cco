@@ -140,6 +140,15 @@ for backend in native docker; do
 			"docker mounts trusted git common dir without remap"
 	fi
 
+	run_backend_case "$backend" "trusted worktree with auto-detect disabled" "$WORKTREE_DIR" "$TEST_HOME" "$TEST_ROOT/disabled_${backend}.log" \
+		--disable-git-worktree-common-dir
+	assert_contains "$TEST_ROOT/disabled_${backend}.log" \
+		"Git worktree common-dir auto-detection disabled by flag" \
+		"disable flag logs that auto-detection is disabled ($backend)"
+	assert_not_contains "$TEST_ROOT/disabled_${backend}.log" \
+		"Adding git common dir for worktree support: $MAIN_GIT_DIR" \
+		"disable flag prevents auto-added git common dir ($backend)"
+
 	echo "$OTHER_GIT_DIR" >"$COMMONDIR_FILE"
 	run_backend_case "$backend" "untrusted worktree (default)" "$WORKTREE_DIR" "$TEST_HOME" "$TEST_ROOT/untrusted_${backend}.log"
 	assert_contains "$TEST_ROOT/untrusted_${backend}.log" \
