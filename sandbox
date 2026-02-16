@@ -192,6 +192,7 @@ run_linux() {
 		--dev /dev
 		--proc /proc
 		--tmpfs /tmp
+		--cap-drop ALL
 	)
 
 	# Add seccomp filter if available (blocks TIOCSTI/TIOCLINUX sandbox escape)
@@ -437,11 +438,20 @@ run_linux() {
 		args+=("${backend_extra_args[@]}")
 	fi
 
+	local runner=()
+	if [[ "$(id -u)" -eq 0 ]] && command -v setpriv >/dev/null 2>&1; then
+		local owner_gid
+		owner_gid="$(stat -c '%g' "$PWD_ABS" 2>/dev/null || echo 0)"
+		if [[ "$owner_gid" != "0" ]]; then
+			runner=(setpriv --reuid 0 --regid 0 --groups "0,$owner_gid")
+		fi
+	fi
+
 	# Execute bwrap with seccomp filter on fd 200 if available
 	if [[ -n "$seccomp_filter" && -f "$seccomp_filter" ]]; then
-		bwrap "${args[@]}" "$@" 200<"$seccomp_filter"
+		"${runner[@]}" bwrap "${args[@]}" "$@" 200<"$seccomp_filter"
 	else
-		bwrap "${args[@]}" "$@"
+		"${runner[@]}" bwrap "${args[@]}" "$@"
 	fi
 	local status=$?
 	cleanup_overlays
