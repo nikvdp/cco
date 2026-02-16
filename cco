@@ -1667,6 +1667,7 @@ shell_mode=false
 safe_mode=false
 force_bridge_network=false
 allow_external_git_dir=false
+enable_git_worktree_common_dir=true
 claude_command_flag=""
 command_flag=""
 codex_mode=false
@@ -1756,6 +1757,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--allow-external-git-dir)
 		allow_external_git_dir=true
+		shift
+		;;
+	--disable-git-worktree-common-dir)
+		enable_git_worktree_common_dir=false
 		shift
 		;;
 	--claude-command)
@@ -2029,6 +2034,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --codex-mode          Add Docker runtime flags for Codex compatibility"
 		echo "  --allow-external-git-dir"
 		echo "                        Trust and mount git common dirs outside normal layouts"
+		echo "  --disable-git-worktree-common-dir"
+		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
@@ -2149,7 +2156,7 @@ main() {
 	# If inside a git worktree, the object store lives in the main repo's
 	# .git directory, not the worktree. Add it as an additional dir so both
 	# sandbox backends whitelist it for writes automatically.
-	if command -v git &>/dev/null; then
+	if [[ "$enable_git_worktree_common_dir" == true ]] && command -v git &>/dev/null; then
 		local git_common_dir_raw git_dir_raw git_common_dir git_dir
 		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
 		git_dir_raw="$(git rev-parse --git-dir 2>/dev/null)" || true
@@ -2181,6 +2188,8 @@ main() {
 				warn "Skipping git common dir: unable to resolve path: $git_common_dir_raw"
 			fi
 		fi
+	elif [[ "$enable_git_worktree_common_dir" == false ]]; then
+		log "Git worktree common-dir auto-detection disabled by flag"
 	fi
 
 	# Run with appropriate backend
