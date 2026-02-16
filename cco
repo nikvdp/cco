@@ -304,6 +304,18 @@ resolve_path() {
 	fi
 }
 
+resolve_existing_dir() {
+	local input="$1"
+	local expanded="$input"
+	if [[ "$expanded" == ~* ]]; then
+		expanded="${expanded/#\~/$HOME}"
+	fi
+	if [[ ! -d "$expanded" ]]; then
+		return 1
+	fi
+	(cd "$expanded" && pwd -P)
+}
+
 add_rw_path() {
 	local path="$1"
 	if [[ ! -d "$path" ]]; then
@@ -1654,9 +1666,14 @@ pull_image=false
 shell_mode=false
 safe_mode=false
 force_bridge_network=false
+allow_external_git_dir=false
 claude_command_flag=""
 command_flag=""
 codex_mode=false
+
+if [[ "${CCO_ALLOW_EXTERNAL_GIT_DIR:-}" == "1" ]]; then
+	allow_external_git_dir=true
+fi
 
 # Load sandbox args from file if CCO_SANDBOX_ARGS_FILE is set
 if [[ -n "${CCO_SANDBOX_ARGS_FILE:-}" ]]; then
@@ -1735,6 +1752,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--codex-mode)
 		configure_codex_mode_paths
+		shift
+		;;
+	--allow-external-git-dir)
+		allow_external_git_dir=true
 		shift
 		;;
 	--claude-command)
@@ -2006,6 +2027,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --backend TYPE        Force sandbox backend (auto, native, docker)"
 		echo "  --safe                Hide home dir except working dir (native only)"
 		echo "  --codex-mode          Add Docker runtime flags for Codex compatibility"
+		echo "  --allow-external-git-dir"
+		echo "                        Trust and mount git common dirs outside normal layouts"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
@@ -2030,6 +2053,8 @@ if [[ $# -gt 0 ]]; then
 		echo "Environment Variables:"
 		echo "  CCO_CLAUDE_COMMAND    Alternative Claude command"
 		echo "  CCO_COMMAND           Arbitrary command (overrides CCO_CLAUDE_COMMAND)"
+		echo "  CCO_ALLOW_EXTERNAL_GIT_DIR=1"
+		echo "                        Trust external git common dirs for worktree support"
 		echo "  CCO_SANDBOX_ARGS_FILE Persistent sandbox args file (one arg per line)"
 		echo "  ANTHROPIC_API_KEY     Passed through automatically"
 		echo "  OPENAI_API_KEY        Passed through automatically"
@@ -2125,14 +2150,35 @@ main() {
 	# .git directory, not the worktree. Add it as an additional dir so both
 	# sandbox backends whitelist it for writes automatically.
 	if command -v git &>/dev/null; then
-		local git_common_dir
-		git_common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || true
-		if [[ -n "$git_common_dir" ]]; then
-			git_common_dir="$(cd "$git_common_dir" && pwd)"
-			if [[ "$git_common_dir" != "$PWD"/.git ]]; then
-				additional_dirs+=("$git_common_dir")
-				git_worktree_common_dir="$git_common_dir"
-				log "Adding git common dir for worktree support: $git_common_dir"
+		local git_common_dir_raw git_dir_raw git_common_dir git_dir
+		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
+		git_dir_raw="$(git rev-parse --git-dir 2>/dev/null)" || true
+
+		if [[ -n "$git_common_dir_raw" && -n "$git_dir_raw" ]]; then
+			if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+				if git_dir="$(resolve_existing_dir "$git_dir_raw")"; then
+					local trusted_layout=false
+					if [[ "$git_dir" == "$git_common_dir" ]]; then
+						trusted_layout=true
+					elif [[ "$git_dir" == "$git_common_dir"/worktrees/* ]]; then
+						trusted_layout=true
+					fi
+
+					if [[ "$trusted_layout" == true || "$allow_external_git_dir" == true ]]; then
+						if [[ "$git_common_dir" != "$PWD"/.git ]] && ! path_in_array "$git_common_dir" "${additional_dirs[@]}"; then
+							additional_dirs+=("$git_common_dir")
+							git_worktree_common_dir="$git_common_dir"
+							log "Adding git common dir for worktree support: $git_common_dir"
+						fi
+					else
+						warn "Skipping untrusted git common dir layout: $git_common_dir"
+						warn "Use --allow-external-git-dir (or CCO_ALLOW_EXTERNAL_GIT_DIR=1) to allow it"
+					fi
+				else
+					warn "Skipping git common dir: unable to resolve git dir path: $git_dir_raw"
+				fi
+			else
+				warn "Skipping git common dir: unable to resolve path: $git_common_dir_raw"
 			fi
 		fi
 	fi
