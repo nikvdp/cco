@@ -324,6 +324,10 @@ What it does:
 - Mounts `~/.codex` into the sandbox so `codex` can access it.
 - Leaves containment to `cco` (native Seatbelt/bubblewrap or Docker), so `codex` cannot escape mounted paths even with bypass flags.
 
+Important runtime note:
+- `cco` executes tools as the mapped non-root container user with `HOME` set to that user's home.
+- Direct `docker exec` sessions as `root` are unsupported for normal auth/config behavior. If you must run commands manually, use `docker exec -u hostuser ...` (or `-u <HOST_UID>:<HOST_GID>`).
+
 Examples:
 ```bash
 # Start Codex inside cco's sandbox
