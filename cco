@@ -1123,6 +1123,69 @@ run_container() {
 		-w "$current_dir"
 	)
 
+	# Add docker mount with destination de-duplication.
+	# If the target is already mounted read-only and a later mount requests
+	# read-write access, upgrade the existing mount to read-write.
+	mount_target_from_spec() {
+		local spec="$1"
+		local after_source="${spec#*:}"
+		printf '%s\n' "${after_source%%:*}"
+	}
+
+	find_mount_spec_index() {
+		local target="$1"
+		local i=0
+		while [[ $i -lt ${#docker_args[@]} ]]; do
+			if [[ "${docker_args[$i]}" == "-v" ]]; then
+				local spec="${docker_args[$((i + 1))]}"
+				local existing_target
+				existing_target=$(mount_target_from_spec "$spec")
+				if [[ "$existing_target" == "$target" ]]; then
+					echo "$((i + 1))"
+					return 0
+				fi
+				((i += 2))
+			else
+				((i += 1))
+			fi
+		done
+		return 1
+	}
+
+	add_mount_arg() {
+		local source="$1"
+		local target="$2"
+		local mode="${3:-rw}"
+		local mount_spec="$source:$target"
+		if [[ "$mode" == "ro" ]]; then
+			mount_spec="$mount_spec:ro"
+		fi
+
+		local existing_index
+		if existing_index=$(find_mount_spec_index "$target"); then
+			local existing_spec="${docker_args[$existing_index]}"
+			local existing_mode="rw"
+			if [[ "$existing_spec" == *":ro" ]]; then
+				existing_mode="ro"
+			fi
+
+			if [[ "$mode" == "rw" && "$existing_mode" == "ro" ]]; then
+				docker_args[$existing_index]="$source:$target"
+				warn "Upgrading duplicate mount to read-write for $target"
+				return 0
+			fi
+
+			if [[ "$existing_spec" == "$mount_spec" ]]; then
+				warn "Skipping duplicate mount for $target"
+			else
+				warn "Skipping conflicting mount for $target (keeping existing mount)"
+			fi
+			return 0
+		fi
+
+		docker_args+=(-v "$mount_spec")
+	}
+
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
 
@@ -1132,15 +1195,15 @@ run_container() {
 	for dir in "${additional_dirs[@]}"; do
 		if [[ -d "$dir" ]]; then
 			if [[ -n "$git_worktree_common_dir" && "$dir" == "$git_worktree_common_dir" ]]; then
-				docker_args+=(-v "$dir":"$dir")
+				add_mount_arg "$dir" "$dir"
 				log "Mounting additional directory: $dir"
 			elif [[ "$dir" == "$HOME"/* ]]; then
 				local relative="${dir#"$HOME"/}"
 				local container_dir="$container_home/$relative"
-				docker_args+=(-v "$dir":"$container_dir")
+				add_mount_arg "$dir" "$container_dir"
 				log "Mounting additional directory: $dir → $container_dir"
 			else
-				docker_args+=(-v "$dir":"$dir")
+				add_mount_arg "$dir" "$dir"
 				log "Mounting additional directory: $dir"
 			fi
 		fi
@@ -1162,7 +1225,7 @@ run_container() {
 		local codex_shim_dir
 		codex_shim_dir=$(create_codex_mode_shim_dir)
 		docker_cleanup_paths+=("$codex_shim_dir")
-		docker_args+=(-v "$codex_shim_dir":"$codex_shim_dir":ro)
+		add_mount_arg "$codex_shim_dir" "$codex_shim_dir" "ro"
 		docker_args+=(-e "CCO_PREPEND_PATH=$codex_shim_dir")
 		log "Enabled codex-mode PATH shim for nested codex invocations"
 	fi
@@ -1170,9 +1233,9 @@ run_container() {
 	# Apply read-only mounts
 	for ro_path in "${additional_ro_paths[@]}"; do
 		if [[ -d "$ro_path" ]]; then
-			docker_args+=(-v "$ro_path":"$ro_path":ro)
+			add_mount_arg "$ro_path" "$ro_path" "ro"
 		elif [[ -f "$ro_path" ]]; then
-			docker_args+=(-v "$ro_path":"$ro_path":ro)
+			add_mount_arg "$ro_path" "$ro_path" "ro"
 		else
 			warn "Skipping read-only mount (path disappeared): $ro_path"
 		fi
@@ -1184,12 +1247,12 @@ run_container() {
 		if [[ -d "$blocked_path" ]]; then
 			tmp_overlay=$(mktemp -d)
 			docker_cleanup_paths+=("$tmp_overlay")
-			docker_args+=(-v "$tmp_overlay":"$blocked_path":ro)
+			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		elif [[ -f "$blocked_path" ]]; then
 			tmp_overlay=$(mktemp)
 			touch "$tmp_overlay"
 			docker_cleanup_paths+=("$tmp_overlay")
-			docker_args+=(-v "$tmp_overlay":"$blocked_path":ro)
+			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		else
 			warn "Skipping deny overlay (path disappeared): $blocked_path"
 			continue
@@ -1312,10 +1375,10 @@ run_container() {
 		# Check for Docker socket locations (Linux and macOS with Docker Desktop)
 		if [[ -S "/var/run/docker.sock" ]]; then
 			log "Enabling Docker access via /var/run/docker.sock"
-			docker_args+=(-v "/var/run/docker.sock":"/var/run/docker.sock")
+			add_mount_arg "/var/run/docker.sock" "/var/run/docker.sock"
 		elif [[ -S "$HOME/.docker/run/docker.sock" ]]; then
 			log "Enabling Docker access via $HOME/.docker/run/docker.sock"
-			docker_args+=(-v "$HOME/.docker/run/docker.sock":"/var/run/docker.sock")
+			add_mount_arg "$HOME/.docker/run/docker.sock" "/var/run/docker.sock"
 		else
 			warn "Docker socket not found - Docker access may not work"
 			warn "Tried: /var/run/docker.sock, $HOME/.docker/run/docker.sock"
@@ -1385,13 +1448,13 @@ run_container() {
 		mkdir -p "$HOME/.claude"
 	fi
 	log "Mounting ~/.claude directory: $HOME/.claude → $container_home/.claude"
-	docker_args+=(-v "$HOME/.claude":"$container_home/.claude")
+	add_mount_arg "$HOME/.claude" "$container_home/.claude"
 
 	# If the detected config directory is different from ~/.claude, mount it too
 	if [[ "$host_system_claude_dir" != "$HOME/.claude" ]]; then
 		log "Also mounting config directory: $host_system_claude_dir → $container_home/.config/claude"
 		# Create the parent directory in the mount command
-		docker_args+=(-v "$host_system_claude_dir":"$container_home/.config/claude")
+		add_mount_arg "$host_system_claude_dir" "$container_home/.config/claude"
 	fi
 
 	# Extract fresh credentials from keychain for macOS
@@ -1411,10 +1474,10 @@ run_container() {
 
 			# Mount credentials with appropriate permissions based on --allow-oauth-refresh
 			if [[ "$allow_oauth_refresh" = true ]]; then
-				docker_args+=(-v "$temp_creds_dir/.credentials.json":"$container_home/.claude/.credentials.json")
+				add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json"
 				log "Mounting fresh credentials from macOS Keychain (read-write for OAuth refresh)"
 			else
-				docker_args+=(-v "$temp_creds_dir/.credentials.json":"$container_home/.claude/.credentials.json:ro")
+				add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json" "ro"
 				log "Mounting fresh credentials from macOS Keychain (read-only)"
 			fi
 		fi
@@ -1432,10 +1495,10 @@ run_container() {
 
 		# Mount credentials with appropriate permissions based on --allow-oauth-refresh
 		if [[ "$allow_oauth_refresh" = true ]]; then
-			docker_args+=(-v "$temp_creds_dir/.credentials.json":"$container_home/.claude/.credentials.json")
+			add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json"
 			log "Mounting credentials file (read-write for OAuth refresh)"
 		else
-			docker_args+=(-v "$temp_creds_dir/.credentials.json":"$container_home/.claude/.credentials.json:ro")
+			add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json" "ro"
 			log "Mounting credentials file (read-only)"
 		fi
 	fi
@@ -1446,17 +1509,17 @@ run_container() {
 		echo "{}" >"$HOME/.claude.json"
 	fi
 	log "Mounting main .claude.json from home directory"
-	docker_args+=(-v "$HOME/.claude.json":"$container_home/.claude.json")
+	add_mount_arg "$HOME/.claude.json" "$container_home/.claude.json"
 
 	# Mount project-specific .claude directory (read-write for project settings)
 	if [[ -d "$project_claude_dir" ]]; then
 		log "Mounting project Claude config from $project_claude_dir (read-write)"
-		docker_args+=(-v "$project_claude_dir":"$project_claude_dir")
+		add_mount_arg "$project_claude_dir" "$project_claude_dir"
 	fi
 
 	# Bind mount common config files
-	[[ -f "$HOME/.gitconfig" ]] && docker_args+=(-v "$HOME/.gitconfig":"$container_home/.gitconfig:ro")
-	[[ -d "$HOME/.ssh" ]] && docker_args+=(-v "$HOME/.ssh":"$container_home/.ssh:ro")
+	[[ -f "$HOME/.gitconfig" ]] && add_mount_arg "$HOME/.gitconfig" "$container_home/.gitconfig" "ro"
+	[[ -d "$HOME/.ssh" ]] && add_mount_arg "$HOME/.ssh" "$container_home/.ssh" "ro"
 
 	# Add any extra sandbox args (from -- or CCO_SANDBOX_ARGS_FILE)
 	if [[ ${#sandbox_extra_args[@]} -gt 0 ]]; then
