@@ -122,12 +122,12 @@ get_command() {
 	fi
 }
 
-# Load codex-specific behavior/policies from dedicated module.
-if [[ -f "$CCO_INSTALLATION_DIR/lib/codex_mode.sh" ]]; then
+# Load agent-specific behavior/policies from dedicated modules.
+if [[ -f "$CCO_INSTALLATION_DIR/lib/agents.sh" ]]; then
 	# shellcheck source=/dev/null
-	source "$CCO_INSTALLATION_DIR/lib/codex_mode.sh"
+	source "$CCO_INSTALLATION_DIR/lib/agents.sh"
 else
-	error "Missing required module: $CCO_INSTALLATION_DIR/lib/codex_mode.sh"
+	error "Missing required module: $CCO_INSTALLATION_DIR/lib/agents.sh"
 	exit 1
 fi
 
@@ -1856,68 +1856,35 @@ if [[ $# -gt 0 ]]; then
 		;;
 	codex)
 		# OpenAI Codex mode - set up the command and add default directory
-		command_flag="codex"
-		configure_codex_mode_paths
+		configure_agent_subcommand "codex"
 		shift
 		# All remaining arguments are passed to codex
 		claude_args=("$@")
 		;;
 	droid)
 		# Droid CLI mode - set up the command and add default directory
-		command_flag="droid"
-		# Add ~/.factory to additional directories if it exists
-		if [[ -d "$HOME/.factory" ]]; then
-			additional_dirs+=("$HOME/.factory")
-		fi
+		configure_agent_subcommand "droid"
 		shift
 		# All remaining arguments are passed to droid
 		claude_args=("$@")
 		;;
 	opencode)
 		# OpenCode mode - set up the command and add default directory
-		command_flag="opencode"
-		# Add ~/.opencode to additional directories if it exists
-		if [[ -d "$HOME/.opencode" ]]; then
-			additional_dirs+=("$HOME/.opencode")
-		fi
-		# Add ~/.config/opencode to additional directories if it exists
-		if [[ -d "$HOME/.config/opencode" ]]; then
-			additional_dirs+=("$HOME/.config/opencode")
-		fi
-		# Add ~/.cache/opencode to additional directories if it exists
-		if [[ -d "$HOME/.cache/opencode" ]]; then
-			additional_dirs+=("$HOME/.cache/opencode")
-		fi
-		# Add ~/.local/share/opencode to additional directories if it exists
-		if [[ -d "$HOME/.local/share/opencode" ]]; then
-			additional_dirs+=("$HOME/.local/share/opencode")
-		fi
-		# Add ~/.local/state/opencode to additional directories if it exists
-		if [[ -d "$HOME/.local/state/opencode" ]]; then
-			additional_dirs+=("$HOME/.local/state/opencode")
-		fi
+		configure_agent_subcommand "opencode"
 		shift
 		# All remaining arguments are passed to opencode
 		claude_args=("$@")
 		;;
 	pi)
 		# Pi coding agent mode - YOLO by default, no skip-permissions flag needed
-		command_flag="pi"
-		# Add ~/.pi to additional directories if it exists (settings, sessions, extensions)
-		if [[ -d "$HOME/.pi" ]]; then
-			additional_dirs+=("$HOME/.pi")
-		fi
+		configure_agent_subcommand "pi"
 		shift
 		# All remaining arguments are passed to pi
 		claude_args=("$@")
 		;;
 	gemini)
 		# Google Gemini CLI mode - use --yolo for autonomous operation
-		command_flag="gemini --yolo"
-		# Add ~/.gemini to additional directories if it exists (settings, sessions)
-		if [[ -d "$HOME/.gemini" ]]; then
-			additional_dirs+=("$HOME/.gemini")
-		fi
+		configure_agent_subcommand "gemini"
 		shift
 		# All remaining arguments are passed to gemini
 		claude_args=("$@")
@@ -2058,7 +2025,7 @@ main() {
 
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
-	apply_codex_arg_policies
+	apply_agent_arg_policies
 
 	# Check dependencies based on backend
 	check_dependencies
