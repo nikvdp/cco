@@ -174,6 +174,19 @@ codex_args_specify_bypass() {
 	return 1
 }
 
+codex_args_disable_alt_screen() {
+	local args=("$@")
+	local arg
+	for arg in "${args[@]}"; do
+		case "$arg" in
+		--no-alt-screen)
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
 apply_codex_bypass_flag() {
 	if [[ "$codex_mode" != true ]]; then
 		return
@@ -194,6 +207,23 @@ apply_codex_bypass_flag() {
 
 	claude_args=("--dangerously-bypass-approvals-and-sandbox" "${claude_args[@]}")
 	log "Added Codex bypass flag '--dangerously-bypass-approvals-and-sandbox'"
+}
+
+apply_codex_docker_no_alt_screen_default() {
+	if [[ "$codex_mode" != true || "$SANDBOX_BACKEND" != "docker" ]]; then
+		return
+	fi
+
+	if ! is_codex_command_selected; then
+		return
+	fi
+
+	if codex_args_disable_alt_screen "${claude_args[@]}"; then
+		return
+	fi
+
+	claude_args=("--no-alt-screen" "${claude_args[@]}")
+	log "Added Codex Docker default argument '--no-alt-screen'"
 }
 
 apply_codex_docker_sandbox_fallback() {
@@ -1263,6 +1293,18 @@ run_container() {
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
 
+	# Determine Codex config directory mapping for Docker codex-mode sessions.
+	# This ensures Codex auth/state resolves to the mounted directory even when
+	# commands run with a different HOME (for example root inside container).
+	local host_codex_home="${CODEX_HOME:-$HOME/.codex}"
+	local resolved_host_codex_home
+	resolved_host_codex_home=$(resolve_path "$host_codex_home")
+	local container_codex_home="$resolved_host_codex_home"
+	if [[ "$resolved_host_codex_home" == "$HOME"/* ]]; then
+		local codex_relative="${resolved_host_codex_home#"$HOME"/}"
+		container_codex_home="$container_home/$codex_relative"
+	fi
+
 	# Mount any additional directories specified with --add-dir
 	# Remap $HOME-relative paths to $container_home inside the container
 	# so agents can find their config dirs (e.g. ~/.codex → /home/hostuser/.codex)
@@ -1435,6 +1477,12 @@ run_container() {
 			fi
 		fi
 	done
+
+	# Ensure Codex resolves auth/state from the mounted directory in codex-mode.
+	if [[ "$codex_mode" == true ]]; then
+		docker_args+=(-e "CODEX_HOME=$container_codex_home")
+		log "Setting CODEX_HOME in container: $container_codex_home"
+	fi
 
 	# Load .env file if it exists
 	[[ -f ".env" ]] && docker_args+=(--env-file .env)
@@ -2231,6 +2279,7 @@ main() {
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
 	apply_codex_bypass_flag
+	apply_codex_docker_no_alt_screen_default
 	apply_codex_docker_sandbox_fallback
 
 	# Check dependencies based on backend
