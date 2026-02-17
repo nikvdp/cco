@@ -1274,7 +1274,7 @@ run_container() {
 			fi
 
 			if [[ "$mode" == "rw" && "$existing_mode" == "ro" ]]; then
-				docker_args[$existing_index]="$source:$target"
+				docker_args[existing_index]="$source:$target"
 				warn "Upgrading duplicate mount to read-write for $target"
 				return 0
 			fi
