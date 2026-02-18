@@ -13,6 +13,7 @@ source "$CCO_INSTALLATION_DIR/lib/agents/gemini.sh"
 
 configure_agent_subcommand() {
 	local agent="$1"
+	# shellcheck disable=SC2034  # command_flag is consumed by cco main script after module call.
 	case "$agent" in
 	codex)
 		command_flag="codex"
