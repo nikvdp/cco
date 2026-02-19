@@ -7,6 +7,16 @@ HOST_GID="${HOST_GID:-1000}"
 
 # If already running as the target user, just exec
 if [ "$(id -u)" = "$HOST_UID" ]; then
+	USER_HOME=$(getent passwd "$HOST_UID" | cut -d: -f6)
+	if [ -z "$USER_HOME" ]; then
+		echo "✗ Failed to resolve home directory for UID $HOST_UID" >&2
+		exit 1
+	fi
+	if [ "$HOST_UID" = "0" ]; then
+		echo "✗ Refusing to run tool command as root" >&2
+		exit 1
+	fi
+	export HOME="$USER_HOME"
 	exec "$@"
 fi
 
@@ -72,9 +82,12 @@ for arg in "$@"; do
 	cmd="$cmd '$escaped_arg'"
 done
 
-# Set HOME environment variable and run command (preserve working directory)
+# Set HOME and enforce non-root execution invariants for tool commands.
+runtime_checks="if [ \"\$(id -u)\" = \"0\" ]; then echo \"✗ Refusing to run tool command as root\" >&2; exit 1; fi; if [ \"\$HOME\" != \"$USER_HOME\" ]; then echo \"✗ HOME mismatch inside container: expected $USER_HOME, got \$HOME\" >&2; exit 1; fi"
+
+# Run command as mapped host user (preserve working directory)
 if [ -n "${CCO_PREPEND_PATH:-}" ]; then
-	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$CCO_PREPEND_PATH':\$PATH && $cmd"
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$CCO_PREPEND_PATH':\$PATH && $runtime_checks && exec $cmd"
 else
-	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && $cmd"
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && $runtime_checks && exec $cmd"
 fi
