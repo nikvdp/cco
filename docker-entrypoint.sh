@@ -7,19 +7,19 @@ HOST_GID="${HOST_GID:-1000}"
 
 # Ensure Claude is also available at the native per-user location.
 ensure_user_local_claude() {
-	local user_home="$1"
-	local target="$user_home/.local/bin/claude"
-	local system_claude=""
-	system_claude=$(command -v claude 2>/dev/null || true)
+	ensure_user_local_claude_user_home="$1"
+	ensure_user_local_claude_target="$ensure_user_local_claude_user_home/.local/bin/claude"
+	ensure_user_local_claude_system_claude=""
+	ensure_user_local_claude_system_claude=$(command -v claude 2>/dev/null || true)
 
-	if [ -z "$system_claude" ]; then
+	if [ -z "$ensure_user_local_claude_system_claude" ]; then
 		return 0
 	fi
 
-	mkdir -p "$user_home/.local/bin" 2>/dev/null || true
+	mkdir -p "$ensure_user_local_claude_user_home/.local/bin" 2>/dev/null || true
 
-	if [ ! -e "$target" ]; then
-		ln -sf "$system_claude" "$target" 2>/dev/null || true
+	if [ ! -e "$ensure_user_local_claude_target" ]; then
+		ln -sf "$ensure_user_local_claude_system_claude" "$ensure_user_local_claude_target" 2>/dev/null || true
 	fi
 }
 
