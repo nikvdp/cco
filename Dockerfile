@@ -113,7 +113,11 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Install Claude Code via official native installer (no longer npm)
 ARG CACHE_BUST=default
 RUN echo "Cache bust: ${CACHE_BUST}" && \
-    curl -fsSL https://claude.ai/install.sh | bash
+    curl -fsSL https://claude.ai/install.sh | bash && \
+    # Installer runs as root and places claude under /root/.local/bin by default.
+    # Copy the real binary into a global path so the runtime host-mapped user can execute it.
+    install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude && \
+    /usr/local/bin/claude --version
 
 # Install other CLI coding agents via npm (always fetch latest versions)
 RUN npm install -g \
