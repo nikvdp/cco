@@ -5,6 +5,24 @@ set -e
 HOST_UID="${HOST_UID:-1000}"
 HOST_GID="${HOST_GID:-1000}"
 
+# Ensure Claude is also available at the native per-user location.
+ensure_user_local_claude() {
+	local user_home="$1"
+	local target="$user_home/.local/bin/claude"
+	local system_claude=""
+	system_claude=$(command -v claude 2>/dev/null || true)
+
+	if [ -z "$system_claude" ]; then
+		return 0
+	fi
+
+	mkdir -p "$user_home/.local/bin" 2>/dev/null || true
+
+	if [ ! -e "$target" ]; then
+		ln -sf "$system_claude" "$target" 2>/dev/null || true
+	fi
+}
+
 # If already running as the target user, just exec
 if [ "$(id -u)" = "$HOST_UID" ]; then
 	USER_HOME=$(getent passwd "$HOST_UID" | cut -d: -f6)
@@ -19,6 +37,7 @@ if [ "$(id -u)" = "$HOST_UID" ]; then
 	mkdir -p "$USER_HOME/.local/bin" "$USER_HOME/.local/share" "$USER_HOME/.config" "$USER_HOME/.cache" 2>/dev/null || true
 	export HOME="$USER_HOME"
 	export PATH="$USER_HOME/.local/bin:$PATH"
+	ensure_user_local_claude "$USER_HOME"
 	exec "$@"
 fi
 
@@ -59,6 +78,8 @@ chown "$HOST_UID:$HOST_GID" "$USER_HOME" 2>/dev/null || true
 # (like Claude Code) match their expected runtime layout.
 mkdir -p "$USER_HOME/.cache" "$USER_HOME/.config" "$USER_HOME/.local" "$USER_HOME/.local/bin" "$USER_HOME/.local/share" 2>/dev/null || true
 chown -R "$HOST_UID:$HOST_GID" "$USER_HOME/.cache" "$USER_HOME/.config" "$USER_HOME/.local" 2>/dev/null || true
+ensure_user_local_claude "$USER_HOME"
+chown -h "$HOST_UID:$HOST_GID" "$USER_HOME/.local/bin/claude" 2>/dev/null || true
 
 # Fix ownership of mounted claude files (but don't recurse deeply on mounted volumes)
 if [ -f "$USER_HOME/.claude.json" ]; then
