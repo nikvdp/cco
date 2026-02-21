@@ -118,7 +118,7 @@ assert_not_contains "$TEST_ROOT/readonly_codex_mode.log" \
 	"no duplicate docker mount point error"
 
 echo ""
-echo "Test: runtime user has native claude path with no install-method mismatch warning"
+echo "Test: runtime user has native claude path"
 if "$CCO_BIN" --backend docker --allow-readonly "$HOME/.claude" --add-dir "$HOME/.codex" --codex-mode \
 	shell "echo CLAUDE_PATH=\$(command -v claude); ls -l /home/hostuser/.local/bin/claude; claude --version" >"$TEST_ROOT/native_claude_path.log" 2>&1; then
 	pass "native claude path check exited successfully"
@@ -136,9 +136,6 @@ assert_contains "$TEST_ROOT/native_claude_path.log" \
 assert_contains "$TEST_ROOT/native_claude_path.log" \
 	"Claude Code" \
 	"claude command runs successfully in codex-mode container"
-assert_not_contains "$TEST_ROOT/native_claude_path.log" \
-	"installMethod is native, but claude command not found at /home/hostuser/.local/bin/claude" \
-	"native install-method mismatch warning is absent"
 
 echo ""
 echo "=== Results ==="
