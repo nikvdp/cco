@@ -5,6 +5,24 @@ set -e
 HOST_UID="${HOST_UID:-1000}"
 HOST_GID="${HOST_GID:-1000}"
 
+# Ensure Claude is also available at the native per-user location.
+ensure_user_local_claude() {
+	ensure_user_local_claude_user_home="$1"
+	ensure_user_local_claude_target="$ensure_user_local_claude_user_home/.local/bin/claude"
+	ensure_user_local_claude_system_claude=""
+	ensure_user_local_claude_system_claude=$(command -v claude 2>/dev/null || true)
+
+	if [ -z "$ensure_user_local_claude_system_claude" ]; then
+		return 0
+	fi
+
+	mkdir -p "$ensure_user_local_claude_user_home/.local/bin" 2>/dev/null || true
+
+	if [ ! -e "$ensure_user_local_claude_target" ]; then
+		ln -sf "$ensure_user_local_claude_system_claude" "$ensure_user_local_claude_target" 2>/dev/null || true
+	fi
+}
+
 # If already running as the target user, just exec
 if [ "$(id -u)" = "$HOST_UID" ]; then
 	USER_HOME=$(getent passwd "$HOST_UID" | cut -d: -f6)
@@ -16,7 +34,10 @@ if [ "$(id -u)" = "$HOST_UID" ]; then
 		echo "✗ Refusing to run tool command as root" >&2
 		exit 1
 	fi
+	mkdir -p "$USER_HOME/.local/bin" "$USER_HOME/.local/share" "$USER_HOME/.config" "$USER_HOME/.cache" 2>/dev/null || true
 	export HOME="$USER_HOME"
+	export PATH="$USER_HOME/.local/bin:$PATH"
+	ensure_user_local_claude "$USER_HOME"
 	exec "$@"
 fi
 
@@ -52,9 +73,13 @@ chmod 440 "/etc/sudoers.d/$USER_NAME"
 mkdir -p "$USER_HOME" 2>/dev/null || true
 chown "$HOST_UID:$HOST_GID" "$USER_HOME" 2>/dev/null || true
 
-# Create and fix ownership of common cache/config directories
-mkdir -p "$USER_HOME/.cache" "$USER_HOME/.config" "$USER_HOME/.local" 2>/dev/null || true
+# Create and fix ownership of common cache/config directories.
+# Keep ~/.local/bin present so tools installed with native per-user installers
+# (like Claude Code) match their expected runtime layout.
+mkdir -p "$USER_HOME/.cache" "$USER_HOME/.config" "$USER_HOME/.local" "$USER_HOME/.local/bin" "$USER_HOME/.local/share" 2>/dev/null || true
 chown -R "$HOST_UID:$HOST_GID" "$USER_HOME/.cache" "$USER_HOME/.config" "$USER_HOME/.local" 2>/dev/null || true
+ensure_user_local_claude "$USER_HOME"
+chown -h "$HOST_UID:$HOST_GID" "$USER_HOME/.local/bin/claude" 2>/dev/null || true
 
 # Fix ownership of mounted claude files (but don't recurse deeply on mounted volumes)
 if [ -f "$USER_HOME/.claude.json" ]; then
@@ -87,7 +112,7 @@ runtime_checks="if [ \"\$(id -u)\" = \"0\" ]; then echo \"✗ Refusing to run to
 
 # Run command as mapped host user (preserve working directory)
 if [ -n "${CCO_PREPEND_PATH:-}" ]; then
-	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$CCO_PREPEND_PATH':\$PATH && $runtime_checks && exec $cmd"
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$CCO_PREPEND_PATH':'$USER_HOME/.local/bin':\$PATH && $runtime_checks && exec $cmd"
 else
-	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && $runtime_checks && exec $cmd"
+	exec su -s /bin/sh "$USER_NAME" -c "export HOME='$USER_HOME' && export PATH='$USER_HOME/.local/bin':\$PATH && $runtime_checks && exec $cmd"
 fi

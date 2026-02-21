@@ -118,6 +118,26 @@ assert_not_contains "$TEST_ROOT/readonly_codex_mode.log" \
 	"no duplicate docker mount point error"
 
 echo ""
+echo "Test: runtime user has native claude path"
+if "$CCO_BIN" --backend docker --allow-readonly "$HOME/.claude" --add-dir "$HOME/.codex" --codex-mode \
+	shell "echo CLAUDE_PATH=\$(command -v claude); ls -l /home/hostuser/.local/bin/claude; claude --version" >"$TEST_ROOT/native_claude_path.log" 2>&1; then
+	pass "native claude path check exited successfully"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/native_claude_path.log"
+	fail "native claude path check exited successfully"
+fi
+assert_contains "$TEST_ROOT/native_claude_path.log" \
+	"CLAUDE_PATH=/home/hostuser/.local/bin/claude" \
+	"claude resolves from native user-local path"
+assert_contains "$TEST_ROOT/native_claude_path.log" \
+	"/home/hostuser/.local/bin/claude -> /usr/local/bin/claude" \
+	"native claude symlink points to global installed binary"
+assert_contains "$TEST_ROOT/native_claude_path.log" \
+	"Claude Code" \
+	"claude command runs successfully in codex-mode container"
+
+echo ""
 echo "=== Results ==="
 echo "Passed: $PASSED"
 echo "Failed: $FAILED"
