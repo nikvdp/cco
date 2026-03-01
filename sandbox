@@ -536,6 +536,14 @@ run_macos() {
 		# Optional safe mode: deny reads under $HOME by default, re-allow below
 		if [[ "$safe_mode" == true ]]; then
 			printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$HOME")"
+			# Allow lstat/stat on $HOME and ancestor dirs between $HOME and CWD
+			# (needed by Node.js realpathSync and node_modules/.bin PATH walk)
+			local ancestor="$PWD_ABS"
+			while [[ "$ancestor" != "$HOME" && "$ancestor" == "$HOME"/* ]]; do
+				ancestor="$(dirname "$ancestor")"
+				printf '(allow file-read-metadata (literal "%s"))\n' "$(policy_quote "$ancestor")"
+			done
+			printf '(allow file-read-metadata (literal "%s"))\n' "$(policy_quote "$HOME")"
 		fi
 
 		# Deny paths explicitly (BEFORE any allows that might be under them)
