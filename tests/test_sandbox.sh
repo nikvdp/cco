@@ -369,6 +369,51 @@ else
 	fail "--safe still allows current directory: got '$output'"
 fi
 
+echo "Test: --safe allows lstat on home directory"
+if ./sandbox --safe stat "$HOME" >/dev/null 2>&1; then
+	pass "--safe allows lstat on home directory"
+else
+	fail "--safe allows lstat on home directory"
+fi
+
+echo "Test: --safe still denies listing home directory contents"
+if ./sandbox --safe ls "$HOME" >/dev/null 2>&1; then
+	fail "--safe denies listing home: ls succeeded"
+else
+	pass "--safe denies listing home directory contents"
+fi
+
+echo "Test: --safe allows lstat on ancestor dirs between HOME and CWD"
+parent="$(dirname "$PWD")"
+if [[ "$parent" == "$HOME"/* || "$parent" == "$HOME" ]]; then
+	if ./sandbox --safe stat "$parent" >/dev/null 2>&1; then
+		pass "--safe allows lstat on ancestor dirs"
+	else
+		fail "--safe allows lstat on ancestor dirs"
+	fi
+else
+	skip "--safe ancestor test: CWD not under HOME"
+fi
+
+echo "Test: --safe denies reading files from ancestor dirs under HOME"
+ancestor="$PWD"
+read_blocked=true
+while [[ "$ancestor" != "$HOME" && "$ancestor" == "$HOME"/* ]]; do
+	ancestor="$(dirname "$ancestor")"
+	if ./sandbox --safe ls "$ancestor" >/dev/null 2>&1; then
+		read_blocked=false
+		fail "--safe denies reading ancestors: ls $ancestor succeeded"
+		break
+	fi
+done
+if [[ "$read_blocked" == true ]]; then
+	if [[ "$(dirname "$PWD")" == "$HOME"/* || "$(dirname "$PWD")" == "$HOME" ]]; then
+		pass "--safe denies reading files from ancestor dirs under HOME"
+	else
+		skip "--safe ancestor read test: CWD not under HOME"
+	fi
+fi
+
 #
 # Platform-specific tests
 #
