@@ -272,6 +272,44 @@ handle_add_dir_entry() {
 	esac
 }
 
+# Parse additionalDirectories from .claude/settings.local.json
+# Uses python3 for JSON parsing; silently skips if python3 is unavailable
+load_additional_directories_from_settings() {
+	local settings_file="$PWD/.claude/settings.local.json"
+	if [[ ! -f "$settings_file" ]]; then
+		return
+	fi
+	if ! command -v python3 &>/dev/null; then
+		warn "python3 not found; skipping additionalDirectories from $settings_file"
+		return
+	fi
+	local dirs
+	dirs=$(python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    for d in data.get('additionalDirectories', []):
+        print(d)
+except Exception:
+    pass
+" "$settings_file" 2>/dev/null) || true
+
+	local dir
+	while IFS= read -r dir; do
+		[[ -z "$dir" ]] && continue
+		local resolved
+		resolved=$(resolve_path "$dir")
+		if [[ -n "$resolved" && -d "$resolved" ]]; then
+			if ! path_in_array "$resolved" "${additional_dirs[@]}"; then
+				add_rw_path "$resolved"
+				log "Adding additional directory from settings: $resolved"
+			fi
+		else
+			warn "Skipping additionalDirectories entry (not a directory): $dir"
+		fi
+	done <<< "$dirs"
+}
+
 # Check if Docker is available (only when using Docker backend)
 check_docker_dependencies() {
 	# Check for Docker
@@ -2499,6 +2537,9 @@ main() {
 			log "Using existing cco image"
 		fi
 	fi
+
+	# Load additionalDirectories from .claude/settings.local.json
+	load_additional_directories_from_settings
 
 	# If inside a git worktree, the object store lives in the main repo's
 	# .git directory, not the worktree. Add it as an additional dir so both
