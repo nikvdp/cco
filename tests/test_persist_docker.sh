@@ -59,6 +59,10 @@ sanitize_dir_name() {
 	basename "$1" | tr -c '[:alnum:]._-' '_'
 }
 
+sanitize_name_fragment() {
+	printf '%s' "$1" | tr -c '[:alnum:]._-' '_' | cut -c1-40
+}
+
 echo "=== Docker Persist Regression Tests ==="
 echo "Platform: $(uname -s) ($(uname -m))"
 echo ""
@@ -82,10 +86,14 @@ mkdir -p "$ENV_TEST_WORKDIR"
 
 PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(hash_string "$TEST_WORKDIR")"
 ENV_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$ENV_TEST_WORKDIR")-persist-$(hash_string "$ENV_TEST_WORKDIR")"
+ALPHA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "alpha")-$(hash_string "alpha")-$(hash_string "$TEST_WORKDIR")"
+BETA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "beta")-$(hash_string "beta")-$(hash_string "$TEST_WORKDIR")"
 
 cleanup_test_artifacts() {
 	docker rm -f "$PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$ENV_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$ALPHA_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$BETA_CONTAINER_NAME" >/dev/null 2>&1 || true
 	rm -rf "$TEST_ROOT"
 }
 
@@ -193,8 +201,67 @@ else
 fi
 
 echo ""
+echo "Test: named persist sessions keep separate state"
+if run_in_test_workdir --backend docker --persist=alpha --command bash -lc \
+	'echo alpha >/tmp/cco-persist-named-proof && cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-alpha-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-alpha-first.log" "alpha" \
+		"named persist session alpha writes its own state"
+	assert_contains "$TEST_ROOT/persist-alpha-first.log" \
+		"Creating persistent container: $ALPHA_CONTAINER_NAME" \
+		"named persist session alpha creates its own container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-alpha-first.log"
+	fail "named persist session alpha first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist-name beta --command bash -lc \
+	'test ! -e /tmp/cco-persist-named-proof && echo beta >/tmp/cco-persist-named-proof && cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-beta-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-beta-first.log" "beta" \
+		"named persist session beta starts from separate state"
+	assert_contains "$TEST_ROOT/persist-beta-first.log" \
+		"Creating persistent container: $BETA_CONTAINER_NAME" \
+		"named persist session beta creates a distinct container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-beta-first.log"
+	fail "named persist session beta first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist=alpha --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-alpha-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-alpha-second.log" "alpha" \
+		"named persist session alpha keeps its own state"
+	assert_contains "$TEST_ROOT/persist-alpha-second.log" \
+		"Reusing persistent container: $ALPHA_CONTAINER_NAME" \
+		"named persist session alpha reuses the same container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-alpha-second.log"
+	fail "named persist session alpha second run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist-name beta --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-beta-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-beta-second.log" "beta" \
+		"named persist session beta keeps separate state"
+	assert_contains "$TEST_ROOT/persist-beta-second.log" \
+		"Reusing persistent container: $BETA_CONTAINER_NAME" \
+		"named persist session beta reuses the same container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-beta-second.log"
+	fail "named persist session beta second run succeeds"
+fi
+
+echo ""
 echo "Test: --persist rejects .env drift"
 printf 'PERSIST_TEST_ENV=one\n' >"$ENV_TEST_WORKDIR/.env"
+# shellcheck disable=SC2016  # Intentional: expand inside the container shell, not in this test process.
 if run_in_env_test_workdir --backend docker --persist --command bash -lc \
 	'printf %s "$PERSIST_TEST_ENV"' \
 	>"$TEST_ROOT/persist-env-first.log" 2>&1; then
