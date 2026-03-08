@@ -54,10 +54,27 @@ hash_string() {
 	fi
 }
 
+sanitize_name_fragment() {
+	local input="$1"
+	printf '%s' "$input" | tr -c '[:alnum:]._-' '_' | cut -c1-40
+}
+
 generate_container_name() {
 	local current_dir="$PWD"
+	local current_dir_hash
+	current_dir_hash=$(hash_string "$current_dir")
 	if [[ "$persist_mode" == true ]]; then
-		printf 'cco-%s-persist-%s\n' "$sanitized_dir" "$(hash_string "$current_dir")"
+		if [[ -n "$persist_name_flag" ]]; then
+			local persist_name_slug
+			persist_name_slug=$(sanitize_name_fragment "$persist_name_flag")
+			printf 'cco-%s-persist-%s-%s-%s\n' \
+				"$sanitized_dir" \
+				"$persist_name_slug" \
+				"$(hash_string "$persist_name_flag")" \
+				"$current_dir_hash"
+		else
+			printf 'cco-%s-persist-%s\n' "$sanitized_dir" "$current_dir_hash"
+		fi
 	else
 		printf 'cco-%s-%s-%s\n' "$sanitized_dir" "$(date +%s)" "$$"
 	fi
@@ -2352,6 +2369,7 @@ yes_flag=false
 shell_mode=false
 safe_mode=false
 persist_mode=false
+persist_name_flag=""
 force_bridge_network=false
 allow_external_git_dir=false
 enable_git_worktree_common_dir=true
@@ -2384,6 +2402,8 @@ found_separator=false
 for arg in "$@"; do
 	if [[ "$arg" == "--" ]]; then
 		found_separator=true
+		normalized_args+=("$arg")
+	elif [[ "$found_separator" == false && "$arg" == --persist=* ]]; then
 		normalized_args+=("$arg")
 	elif [[ "$found_separator" == false && "$arg" == --*=* ]]; then
 		normalized_args+=("${arg%%=*}" "${arg#*=}")
@@ -2429,6 +2449,34 @@ while [[ $# -gt 0 ]]; do
 	--persist)
 		persist_mode=true
 		shift
+		;;
+	--persist=*)
+		persist_mode=true
+		persist_name_flag="${1#*=}"
+		if [[ -z "$persist_name_flag" ]]; then
+			error "--persist requires a non-empty session name when using --persist=NAME"
+			exit 1
+		fi
+		shift
+		;;
+	--persist-name | --persist-name=*)
+		if [[ "$1" == *"="* ]]; then
+			persist_name_flag="${1#*=}"
+			if [[ -z "$persist_name_flag" ]]; then
+				error "--persist-name requires a non-empty name"
+				exit 1
+			fi
+			persist_mode=true
+			shift
+		else
+			if [[ $# -lt 2 ]]; then
+				error "--persist-name requires an argument"
+				exit 1
+			fi
+			persist_mode=true
+			persist_name_flag="$2"
+			shift 2
+		fi
 		;;
 	--allow-oauth-refresh)
 		allow_oauth_refresh=true
@@ -2705,7 +2753,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --disable-git-worktree-common-dir"
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
-		echo "  --persist             Reuse a Docker container for this project (Docker only)"
+		echo "  --persist[=NAME]      Reuse a Docker container for this project (Docker only)"
+		echo "  --persist-name NAME   Select a named persistent Docker session"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
