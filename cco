@@ -39,10 +39,37 @@ else
 fi
 
 IMAGE_NAME="cco:latest"
-# Generate unique container name to allow concurrent sessions
 # Sanitize directory name for Docker container naming (only alphanumeric, underscore, dash, dot)
 sanitized_dir=$(basename "$PWD" | tr -c '[:alnum:]._-' '_')
-CONTAINER_NAME="cco-${sanitized_dir}-$(date +%s)-$$"
+CONTAINER_NAME=""
+
+hash_string() {
+	local input="$1"
+	if command -v sha256sum &>/dev/null; then
+		printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 12)}'
+	elif command -v shasum &>/dev/null; then
+		printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+	else
+		printf '%s' "$input" | cksum | awk '{print $1}'
+	fi
+}
+
+generate_container_name() {
+	local current_dir="$PWD"
+	if [[ "$persist_mode" == true ]]; then
+		printf 'cco-%s-persist-%s\n' "$sanitized_dir" "$(hash_string "$current_dir")"
+	else
+		printf 'cco-%s-%s-%s\n' "$sanitized_dir" "$(date +%s)" "$$"
+	fi
+}
+
+persist_state_root() {
+	printf '%s/.local/share/cco/persist\n' "$HOME"
+}
+
+persist_state_dir() {
+	printf '%s/%s\n' "$(persist_state_root)" "$CONTAINER_NAME"
+}
 
 # Detect available sandbox backends
 detect_sandbox_backend() {
@@ -1448,11 +1475,13 @@ run_container() {
 	local host_gid
 	host_gid=$(id -g)
 	local current_dir="$PWD"
+	local persist_state_dir_path=""
+	if [[ "$persist_mode" == true ]]; then
+		persist_state_dir_path=$(persist_state_dir)
+		mkdir -p "$persist_state_dir_path"
+	fi
 
 	log "Starting cco container..."
-
-	# Remove existing container if it exists
-	docker rm -f "$CONTAINER_NAME" &>/dev/null || true
 
 	# Detect if we have a TTY
 	local tty_flag=""
@@ -1461,7 +1490,6 @@ run_container() {
 	fi
 
 	local docker_args=(
-		--rm
 		--init
 		--name "$CONTAINER_NAME"
 		--user "root"
@@ -1470,6 +1498,9 @@ run_container() {
 		-v "$current_dir":"$current_dir"
 		-w "$current_dir"
 	)
+	if [[ "$persist_mode" != true ]]; then
+		docker_args=(--rm "${docker_args[@]}")
+	fi
 
 	# Add docker mount with destination de-duplication.
 	# If the target is already mounted read-only and a later mount requests
@@ -1534,8 +1565,22 @@ run_container() {
 		docker_args+=(-v "$mount_spec")
 	}
 
+	find_named_container_id() {
+		docker ps -aq -f "name=^${CONTAINER_NAME}$"
+	}
+
+	container_is_running() {
+		[[ -n "$(docker ps -q -f "name=^${CONTAINER_NAME}$")" ]]
+	}
+
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
+	local container_path="$container_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	local persistent_exec_path="$container_path"
+	docker_args+=(
+		-e "HOME=$container_home"
+		-e "PATH=$container_path"
+	)
 
 	# Determine Codex config directory mapping for Docker codex-mode sessions.
 	# This ensures Codex auth/state resolves to the mounted directory even when
@@ -1579,14 +1624,50 @@ run_container() {
 		done
 	}
 
+	create_deny_overlay_source() {
+		local blocked_path="$1"
+		local overlay_path=""
+		if [[ "$persist_mode" == true ]]; then
+			local deny_hash
+			deny_hash=$(hash_string "$blocked_path")
+			overlay_path="$persist_state_dir_path/deny/$deny_hash"
+			mkdir -p "$(dirname "$overlay_path")"
+			if [[ -d "$blocked_path" ]]; then
+				mkdir -p "$overlay_path"
+			else
+				: >"$overlay_path"
+			fi
+		elif [[ -d "$blocked_path" ]]; then
+			overlay_path=$(mktemp -d)
+			docker_cleanup_paths+=("$overlay_path")
+		else
+			overlay_path=$(mktemp)
+			: >"$overlay_path"
+			docker_cleanup_paths+=("$overlay_path")
+		fi
+		printf '%s\n' "$overlay_path"
+	}
+
 	# In codex mode, mount a PATH shim so nested `codex` calls run with
 	# bypass mode inside cco's outer sandbox.
 	if [[ "$codex_mode" == true ]]; then
 		local codex_shim_dir
-		codex_shim_dir=$(create_codex_mode_shim_dir)
-		docker_cleanup_paths+=("$codex_shim_dir")
+		if [[ "$persist_mode" == true ]]; then
+			codex_shim_dir="$persist_state_dir_path/codex-shim"
+			if [[ ! -x "$codex_shim_dir/codex" ]]; then
+				local temp_codex_shim_dir
+				temp_codex_shim_dir=$(create_codex_mode_shim_dir)
+				mkdir -p "$codex_shim_dir"
+				cp -R "$temp_codex_shim_dir"/. "$codex_shim_dir"/
+				rm -rf "$temp_codex_shim_dir"
+			fi
+		else
+			codex_shim_dir=$(create_codex_mode_shim_dir)
+			docker_cleanup_paths+=("$codex_shim_dir")
+		fi
 		add_mount_arg "$codex_shim_dir" "$codex_shim_dir" "ro"
 		docker_args+=(-e "CCO_PREPEND_PATH=$codex_shim_dir")
+		persistent_exec_path="$codex_shim_dir:$persistent_exec_path"
 		log "Enabled codex-mode PATH shim for nested codex invocations"
 	fi
 
@@ -1604,14 +1685,12 @@ run_container() {
 
 	# Apply deny overlays by mounting empty temp locations
 	for blocked_path in "${deny_paths[@]}"; do
+		local tmp_overlay
 		if [[ -d "$blocked_path" ]]; then
-			tmp_overlay=$(mktemp -d)
-			docker_cleanup_paths+=("$tmp_overlay")
+			tmp_overlay=$(create_deny_overlay_source "$blocked_path")
 			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		elif [[ -f "$blocked_path" ]]; then
-			tmp_overlay=$(mktemp)
-			touch "$tmp_overlay"
-			docker_cleanup_paths+=("$tmp_overlay")
+			tmp_overlay=$(create_deny_overlay_source "$blocked_path")
 			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		else
 			warn "Skipping deny overlay (path disappeared): $blocked_path"
@@ -1619,11 +1698,6 @@ run_container() {
 		fi
 		log "Denying path inside container: $blocked_path"
 	done
-
-	# Add TTY flags if available
-	if [[ -n "$tty_flag" ]]; then
-		docker_args+=("$tty_flag")
-	fi
 
 	# Detect host timezone and set container timezone
 	local host_timezone=""
@@ -1796,16 +1870,29 @@ run_container() {
 
 	# Create temporary directory for credentials extraction
 	local temp_creds_dir
-	temp_creds_dir=$(mktemp -d)
+	if [[ "$persist_mode" == true ]]; then
+		temp_creds_dir="$persist_state_dir_path/creds"
+		mkdir -p "$temp_creds_dir"
+	else
+		temp_creds_dir=$(mktemp -d)
+	fi
 	local original_creds_content=""
 	local host_creds_file=""
 	local startup_system_creds_content=""
 
 	# Setup cleanup and credentials sync-back on exit
 	if [[ "$allow_oauth_refresh" = true ]]; then
-		trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		if [[ "$persist_mode" == true ]]; then
+			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content"; cleanup_docker_overlays' EXIT
+		else
+			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		fi
 	else
-		trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		if [[ "$persist_mode" == true ]]; then
+			trap 'cleanup_docker_overlays' EXIT
+		else
+			trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		fi
 	fi
 
 	# Ensure ~/.claude directory exists and mount it (read-write for state updates)
@@ -1916,6 +2003,28 @@ run_container() {
 		docker_args+=("${sandbox_extra_args[@]}")
 	fi
 
+	compute_persist_config_hash() {
+		local env_file_signature=""
+		if [[ -f ".env" ]]; then
+			env_file_signature=$(hash_string "$(cat .env)")
+		fi
+		local signature
+		signature=$(
+			printf 'image=%s\n' "$IMAGE_NAME"
+			printf 'current_dir=%s\n' "$current_dir"
+			printf 'host_uid=%s\n' "$host_uid"
+			printf 'host_gid=%s\n' "$host_gid"
+			printf 'docker_access=%s\n' "$docker_access"
+			printf 'force_bridge_network=%s\n' "$force_bridge_network"
+			printf 'allow_oauth_refresh=%s\n' "$allow_oauth_refresh"
+			printf 'codex_mode=%s\n' "$codex_mode"
+			printf 'custom_packages=%s\n' "${custom_packages[*]}"
+			printf '.env=%s\n' "$env_file_signature"
+			printf 'docker_args=%s\n' "${docker_args[*]}"
+		)
+		hash_string "$signature"
+	}
+
 	# Function to start background SIGWINCH monitor
 	start_sigwinch_monitor() {
 		local container_name="$1"
@@ -1933,36 +2042,149 @@ run_container() {
 			while docker ps --format '{{.Names}}' | grep -q "^$container_name\$" 2>/dev/null; do
 				sleep 2
 			done
-		) &
+		) >/dev/null 2>&1 &
+		echo $!
+	}
+
+	ensure_persistent_container() {
+		local persist_config_hash="$1"
+		local existing_container_id
+		existing_container_id=$(find_named_container_id)
+
+		if [[ -n "$existing_container_id" ]]; then
+			local existing_config_hash
+			existing_config_hash=$(docker inspect -f '{{ index .Config.Labels "cco.persist.config-hash" }}' "$CONTAINER_NAME" 2>/dev/null || echo "")
+			if [[ "$existing_config_hash" != "$persist_config_hash" ]]; then
+				error "Persistent container exists with a different configuration: $CONTAINER_NAME"
+				error "Remove it with: docker rm -f $CONTAINER_NAME"
+				return 1
+			fi
+			if container_is_running; then
+				log "Reusing persistent container: $CONTAINER_NAME"
+			else
+				log "Starting persistent container: $CONTAINER_NAME"
+				docker start "$CONTAINER_NAME" >/dev/null
+			fi
+			return 0
+		fi
+
+		log "Creating persistent container: $CONTAINER_NAME"
+		docker run -d \
+			--label "cco.persist=1" \
+			--label "cco.persist.config-hash=$persist_config_hash" \
+			--label "cco.persist.state-dir=$persist_state_dir_path" \
+			"${docker_args[@]}" \
+			"$IMAGE_NAME" \
+			sh -lc 'trap "exit 0" TERM INT; while :; do sleep 3600; done' >/dev/null
+	}
+
+	run_persistent_command() {
+		local sigwinch_monitor_pid=""
+		local -a exec_args=(exec)
+		if [[ -n "$tty_flag" ]]; then
+			exec_args+=("$tty_flag")
+		fi
+		exec_args+=(
+			-u "${host_uid}:${host_gid}"
+			-e "HOME=$container_home"
+			-e "PATH=$persistent_exec_path"
+			-w "$current_dir"
+			"$CONTAINER_NAME"
+		)
+
+		if [[ "$shell_mode" = true ]]; then
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				if [[ -n "$tty_flag" ]]; then
+					sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+				fi
+				docker "${exec_args[@]}" bash
+			else
+				docker "${exec_args[@]}" bash -c "${claude_args[*]}"
+			fi
+		else
+			local cmd_str
+			cmd_str=$(get_command)
+			local cmd_array=()
+			read -ra cmd_array <<<"$cmd_str"
+
+			if [[ -n "$tty_flag" ]]; then
+				sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+			fi
+			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+				docker "${exec_args[@]}" "${cmd_array[@]}" "${claude_args[@]}"
+			else
+				docker "${exec_args[@]}" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			fi
+		fi
+		local exec_status=$?
+		if [[ -n "$sigwinch_monitor_pid" ]]; then
+			kill "$sigwinch_monitor_pid" 2>/dev/null || true
+		fi
+		return $exec_status
 	}
 
 	# Run the container (entrypoint will handle user setup)
-	if [[ "$shell_mode" = true ]]; then
-		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode - Docker image may not have user's $SHELL
-			start_sigwinch_monitor "$CONTAINER_NAME"
-			docker run "${docker_args[@]}" "$IMAGE_NAME" bash
-		else
-			# Shell command mode
-			docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
-		fi
+	local run_status=0
+	if [[ "$persist_mode" == true ]]; then
+		local persist_config_hash
+		persist_config_hash=$(compute_persist_config_hash)
+		ensure_persistent_container "$persist_config_hash"
+		run_persistent_command
+		run_status=$?
 	else
-		start_sigwinch_monitor "$CONTAINER_NAME"
-		# Get command to use and split into array for Docker run too
-		local cmd_str
-		cmd_str=$(get_command)
-		read -ra cmd_array <<<"$cmd_str"
-
-		# Check if we're running a custom command (CCO_COMMAND or --command)
-		if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
-			# Running custom command - pass arguments as-is, no Claude-specific flags
-			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+		if [[ "$shell_mode" = true ]]; then
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				# Interactive shell mode - Docker image may not have user's $SHELL
+				local sigwinch_monitor_pid=""
+				if [[ -n "$tty_flag" ]]; then
+					sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+				fi
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" bash
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" bash
+				fi
+				run_status=$?
+				if [[ -n "$sigwinch_monitor_pid" ]]; then
+					kill "$sigwinch_monitor_pid" 2>/dev/null || true
+				fi
+			else
+				# Shell command mode
+				docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
+				run_status=$?
+			fi
 		else
-			# Running Claude - use --dangerously-skip-permissions
-			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			local sigwinch_monitor_pid=""
+			if [[ -n "$tty_flag" ]]; then
+				sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+			fi
+			# Get command to use and split into array for Docker run too
+			local cmd_str
+			cmd_str=$(get_command)
+			read -ra cmd_array <<<"$cmd_str"
+
+			# Check if we're running a custom command (CCO_COMMAND or --command)
+			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+				# Running custom command - pass arguments as-is, no Claude-specific flags
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+				fi
+			else
+				# Running Claude - use --dangerously-skip-permissions
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+				fi
+			fi
+			run_status=$?
+			if [[ -n "$sigwinch_monitor_pid" ]]; then
+				kill "$sigwinch_monitor_pid" 2>/dev/null || true
+			fi
 		fi
 	fi
-	local run_status=$?
 	cleanup_docker_overlays
 	trap - EXIT
 	return $run_status
@@ -2129,6 +2351,7 @@ pull_image=false
 yes_flag=false
 shell_mode=false
 safe_mode=false
+persist_mode=false
 force_bridge_network=false
 allow_external_git_dir=false
 enable_git_worktree_common_dir=true
@@ -2201,6 +2424,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--force-docker-bridge-network)
 		force_bridge_network=true
+		shift
+		;;
+	--persist)
+		persist_mode=true
 		shift
 		;;
 	--allow-oauth-refresh)
@@ -2345,6 +2572,7 @@ done
 
 # Now handle subcommands with remaining args
 set -- "${remaining_args[@]}"
+CONTAINER_NAME=$(generate_container_name)
 if [[ $# -gt 0 ]]; then
 	case $1 in
 	self-update)
@@ -2400,6 +2628,10 @@ if [[ $# -gt 0 ]]; then
 			log "Cleanup complete"
 		else
 			log "No cco containers found"
+		fi
+		if [[ -d "$(persist_state_root)" ]]; then
+			rm -rf "$(persist_state_root)"
+			log "Removed persistent container state"
 		fi
 		exit 0
 		;;
@@ -2473,6 +2705,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --disable-git-worktree-common-dir"
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --persist             Reuse a Docker container for this project (Docker only)"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
@@ -2530,6 +2763,11 @@ main() {
 	# Detect sandbox backend
 	detect_sandbox_backend "$SANDBOX_BACKEND"
 	apply_agent_arg_policies
+
+	if [[ "$persist_mode" == true && "$SANDBOX_BACKEND" != "docker" ]]; then
+		error "--persist is only supported with the Docker backend"
+		exit 1
+	fi
 
 	# Check dependencies based on backend
 	check_dependencies
