@@ -59,6 +59,22 @@ sanitize_name_fragment() {
 	printf '%s' "$input" | tr -c '[:alnum:]._-' '_' | cut -c1-40
 }
 
+is_valid_persist_name() {
+	local input="$1"
+	[[ "$input" =~ ^[[:alnum:]._-]+$ ]]
+}
+
+is_known_subcommand() {
+	case "$1" in
+	shell | codex | droid | opencode | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
 generate_container_name() {
 	local current_dir="$PWD"
 	local current_dir_hash
@@ -2448,7 +2464,12 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--persist)
 		persist_mode=true
-		shift
+		if [[ $# -gt 1 ]] && [[ "$2" != -* ]] && ! is_known_subcommand "$2" && is_valid_persist_name "$2"; then
+			persist_name_flag="$2"
+			shift 2
+		else
+			shift
+		fi
 		;;
 	--persist=*)
 		persist_mode=true
@@ -2457,26 +2478,12 @@ while [[ $# -gt 0 ]]; do
 			error "--persist requires a non-empty session name when using --persist=NAME"
 			exit 1
 		fi
-		shift
-		;;
-	--persist-name | --persist-name=*)
-		if [[ "$1" == *"="* ]]; then
-			persist_name_flag="${1#*=}"
-			if [[ -z "$persist_name_flag" ]]; then
-				error "--persist-name requires a non-empty name"
-				exit 1
-			fi
-			persist_mode=true
-			shift
-		else
-			if [[ $# -lt 2 ]]; then
-				error "--persist-name requires an argument"
-				exit 1
-			fi
-			persist_mode=true
-			persist_name_flag="$2"
-			shift 2
+		if ! is_valid_persist_name "$persist_name_flag"; then
+			error "Invalid persist session name: $persist_name_flag"
+			error "Use only letters, numbers, dot, underscore, or dash"
+			exit 1
 		fi
+		shift
 		;;
 	--allow-oauth-refresh)
 		allow_oauth_refresh=true
@@ -2754,7 +2761,7 @@ if [[ $# -gt 0 ]]; then
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --persist[=NAME]      Reuse a Docker container for this project (Docker only)"
-		echo "  --persist-name NAME   Select a named persistent Docker session"
+		echo "                        Also accepts: --persist NAME"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
