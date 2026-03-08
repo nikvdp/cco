@@ -204,8 +204,12 @@ cco --yes "review this repo"
 # Enable Docker access
 cco --docker-socket
 
-# Reuse a project-scoped Docker container across runs
+# Reuse the default project-scoped Docker container across runs
 cco --persist
+
+# Select a specific persistent session name for this project
+cco --persist=frontend
+cco --persist-name data-migration
 
 # Update cco installation
 cco self-update
@@ -228,7 +232,9 @@ cco --deny-path ~/Downloads
 - `--force-docker-bridge-network` (Docker only): Force bridge networking instead of host networking. By default cco uses `--network=host` when available (Linux, OrbStack). Use this if you need port isolation or want explicit `-p` port forwarding.
 - `--yes` / `-y`: Auto-accept startup recovery prompts such as OAuth refresh or macOS Keychain unlock before `cco` starts.
 - `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
-- `--persist` (Docker only, opt-in): Reuses a named project container instead of starting fresh each run. This keeps installed tools and temporary files around, but it also weakens the “clean sandbox every time” guarantee. Use it only when you intentionally want session reuse.
+- `--persist` (Docker only, opt-in): Reuses the default persistent container for the current project instead of starting fresh each run.
+- `--persist=NAME` or `--persist-name NAME`: Selects a specific persistent session for the current project so you can keep multiple long-lived containers side by side.
+- Persistent sessions keep installed tools and temporary files around, so they weaken the “clean sandbox every time” guarantee. Use them only when you intentionally want session reuse.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
 - `--deny-path PATH`: Deny read/list/write access to a path so it is fully inaccessible to Claude.
