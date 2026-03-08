@@ -209,7 +209,7 @@ cco --persist
 
 # Select a specific persistent session name for this project
 cco --persist=frontend
-cco --persist-name data-migration
+cco --persist data-migration
 
 # Update cco installation
 cco self-update
@@ -233,7 +233,8 @@ cco --deny-path ~/Downloads
 - `--yes` / `-y`: Auto-accept startup recovery prompts such as OAuth refresh or macOS Keychain unlock before `cco` starts.
 - `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 - `--persist` (Docker only, opt-in): Reuses the default persistent container for the current project instead of starting fresh each run.
-- `--persist=NAME` or `--persist-name NAME`: Selects a specific persistent session for the current project so you can keep multiple long-lived containers side by side.
+- `--persist=NAME` or `--persist NAME`: Selects a specific persistent session for the current project so you can keep multiple long-lived containers side by side.
+- Session names use letters, numbers, dot, underscore, or dash. If you want to keep using a subcommand like `shell`, use bare `--persist shell ...` exactly as before for the default session.
 - Persistent sessions keep installed tools and temporary files around, so they weaken the “clean sandbox every time” guarantee. Use them only when you intentionally want session reuse.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
