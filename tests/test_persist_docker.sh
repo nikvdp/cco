@@ -216,7 +216,7 @@ else
 	fail "named persist session alpha first run succeeds"
 fi
 
-if run_in_test_workdir --backend docker --persist-name beta --command bash -lc \
+if run_in_test_workdir --backend docker --persist beta --command bash -lc \
 	'test ! -e /tmp/cco-persist-named-proof && echo beta >/tmp/cco-persist-named-proof && cat /tmp/cco-persist-named-proof' \
 	>"$TEST_ROOT/persist-beta-first.log" 2>&1; then
 	assert_contains "$TEST_ROOT/persist-beta-first.log" "beta" \
@@ -244,7 +244,7 @@ else
 	fail "named persist session alpha second run succeeds"
 fi
 
-if run_in_test_workdir --backend docker --persist-name beta --command bash -lc \
+if run_in_test_workdir --backend docker --persist beta --command bash -lc \
 	'cat /tmp/cco-persist-named-proof' \
 	>"$TEST_ROOT/persist-beta-second.log" 2>&1; then
 	assert_contains "$TEST_ROOT/persist-beta-second.log" "beta" \
@@ -256,6 +256,21 @@ else
 	echo "  output:"
 	sed 's/^/    /' "$TEST_ROOT/persist-beta-second.log"
 	fail "named persist session beta second run succeeds"
+fi
+
+echo ""
+echo "Test: bare --persist still leaves known subcommands alone"
+if run_in_test_workdir --backend docker --persist shell 'printf subcommand-ok' \
+	>"$TEST_ROOT/persist-shell-subcommand.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-shell-subcommand.log" "subcommand-ok" \
+		"persist still allows shell subcommand syntax"
+	assert_contains "$TEST_ROOT/persist-shell-subcommand.log" \
+		"Reusing persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist shell command uses the default project session"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-shell-subcommand.log"
+	fail "persist still allows shell subcommand syntax"
 fi
 
 echo ""
