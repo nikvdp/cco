@@ -204,9 +204,11 @@ additional_dirs=()
 additional_ro_paths=()
 deny_paths=()
 EOF
-	printf 'cd %q\n' "$work_dir" >>"$loader_script"
-	printf 'HOME=%q\n' "$home_dir" >>"$loader_script"
-	printf '%s\n' "$body" >>"$loader_script"
+	{
+		printf 'cd %q\n' "$work_dir"
+		printf 'HOME=%q\n' "$home_dir"
+		printf '%s\n' "$body"
+	} >>"$loader_script"
 
 	echo "Test: $label"
 	if PATH="$path_override" CCO_BIN="$CCO_BIN" /bin/bash "$loader_script" >"$out_file" 2>&1; then
@@ -348,6 +350,7 @@ if command -v jq >/dev/null 2>&1; then
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["$EXTRA_DIR_A"]}
 EOF
+	# shellcheck disable=SC2016  # Intentional: expand inside the loader script, not in this shell.
 	run_loader_case "jq fallback without python3" "$PROJ_DIR" "$TEST_HOME" "$JQ_ONLY_BIN" "$TEST_ROOT/jq_fallback.log" \
 		'load_additional_directories_from_settings; if [[ ${#additional_dirs[@]} -gt 0 ]]; then printf "ADDED:%s\n" "${additional_dirs[0]}"; fi'
 	assert_contains "$TEST_ROOT/jq_fallback.log" \
@@ -369,6 +372,7 @@ assert_contains "$TEST_ROOT/no_parser.log" \
 	"python3/jq not found" \
 	"missing parsers warning is surfaced"
 
+# shellcheck disable=SC2016  # Intentional: expand inside the loader script, not in this shell.
 run_loader_case "pi mode skips Claude settings loader" "$PROJ_DIR" "$TEST_HOME" "$NO_PARSER_BIN" "$TEST_ROOT/pi_mode_skip.log" \
 	'command_flag="pi"; shell_mode=false; if needs_claude_authentication; then load_additional_directories_from_settings; fi; printf "COUNT:%s\n" "${#additional_dirs[@]}"'
 assert_contains "$TEST_ROOT/pi_mode_skip.log" \
