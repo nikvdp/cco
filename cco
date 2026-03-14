@@ -2885,7 +2885,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --disable-git-worktree-common-dir"
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
-		echo "  --persist[=NAME]      Reuse a Docker container for this project (Docker only)"
+		echo "  --persist[=NAME]      Reuse a Docker container for this repo (Docker only)"
 		echo "                        Also accepts: --persist NAME"
 		echo "  --persist-container   Attach to an existing Docker container by name or ID"
 		echo "  --force-docker-bridge-network"
