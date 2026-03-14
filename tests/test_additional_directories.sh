@@ -91,6 +91,37 @@ run_command_case() {
 	fi
 }
 
+run_claude_case() {
+	local backend="$1"
+	local label="$2"
+	local work_dir="$3"
+	local home_dir="$4"
+	local out_file="$5"
+	local fake_claude="$6"
+	local claude_command="${7:-}"
+	local command_file="$work_dir/.claude/cco-test-command.sh"
+
+	if [[ -n "$claude_command" ]]; then
+		cat >"$command_file" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+$claude_command
+EOF
+		chmod +x "$command_file"
+	else
+		rm -f "$command_file"
+	fi
+
+	echo "Test: $label ($backend)"
+	if (cd "$work_dir" && HOME="$home_dir" "$CCO_BIN" --backend "$backend" --claude-command "$fake_claude") >"$out_file" 2>&1; then
+		pass "$label runs successfully ($backend)"
+	else
+		echo "  output:"
+		sed 's/^/    /' "$out_file"
+		fail "$label runs successfully ($backend)"
+	fi
+}
+
 run_shell_case() {
 	local backend="$1"
 	local label="$2"
@@ -165,6 +196,7 @@ eval "$(sed -n '
   /^remove_path_from_array()/,/^}/p
   /^resolve_path()/,/^}/p
   /^add_rw_path()/,/^}/p
+  /^needs_claude_authentication()/,/^}/p
   /^load_additional_directories_from_settings()/,/^}/p
 ' "$CCO_BIN")"
 
@@ -195,10 +227,29 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 
 TEST_HOME="$TEST_ROOT/home"
 mkdir -p "$TEST_HOME"
+mkdir -p "$TEST_HOME/.claude"
+cat >"$TEST_HOME/.claude/.credentials.json" <<'EOF'
+{"testAuth":"ok"}
+EOF
 
 # Project dir with .claude/settings.local.json
 PROJ_DIR="$TEST_ROOT/project"
 mkdir -p "$PROJ_DIR/.claude"
+
+FAKE_CLAUDE_BIN="$PROJ_DIR/fake-claude.sh"
+cat >"$FAKE_CLAUDE_BIN" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "--dangerously-skip-permissions" ]]; then
+	shift
+fi
+
+if [[ -x ".claude/cco-test-command.sh" ]]; then
+	"./.claude/cco-test-command.sh"
+fi
+EOF
+chmod +x "$FAKE_CLAUDE_BIN"
 
 # Extra directories to be referenced from settings
 EXTRA_DIR_A="$TEST_ROOT/extra-a"
@@ -227,7 +278,7 @@ for backend in native docker; do
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["$EXTRA_DIR_A", "$EXTRA_DIR_B"]}
 EOF
-	run_shell_case "$backend" "valid additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/valid_${backend}.log" \
+	run_claude_case "$backend" "valid additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/valid_${backend}.log" "$FAKE_CLAUDE_BIN" \
 		"cat \"$EXTRA_DIR_A/from_host.txt\" >/dev/null && cat \"$EXTRA_DIR_B_IN_SANDBOX/from_host.txt\" >/dev/null && printf \"$backend-a\" > \"$EXTRA_DIR_A/from_sandbox.txt\" && printf \"$backend-b\" > \"$EXTRA_DIR_B_IN_SANDBOX/from_sandbox.txt\""
 	assert_file_content "$EXTRA_DIR_A/from_sandbox.txt" "$backend-a" \
 		"settings allows write access to external dir ($backend)"
@@ -238,14 +289,14 @@ EOF
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["/tmp/no-such-dir-$RANDOM$RANDOM"]}
 EOF
-	run_command_case "$backend" "non-existent directory" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nodir_${backend}.log"
+	run_claude_case "$backend" "non-existent directory" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nodir_${backend}.log" "$FAKE_CLAUDE_BIN"
 	assert_contains "$TEST_ROOT/nodir_${backend}.log" \
 		"Skipping additionalDirectories entry (not a directory)" \
 		"non-existent directory warns ($backend)"
 
 	# Test 3: No settings file — silent, no error
 	rm -f "$PROJ_DIR/.claude/settings.local.json"
-	run_command_case "$backend" "no settings file" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nosettings_${backend}.log"
+	run_claude_case "$backend" "no settings file" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nosettings_${backend}.log" "$FAKE_CLAUDE_BIN"
 	assert_not_contains "$TEST_ROOT/nosettings_${backend}.log" \
 		"additionalDirectories" \
 		"no settings file produces no additionalDirectories output ($backend)"
@@ -254,7 +305,7 @@ EOF
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": []}
 EOF
-	run_command_case "$backend" "empty additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/empty_${backend}.log"
+	run_claude_case "$backend" "empty additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/empty_${backend}.log" "$FAKE_CLAUDE_BIN"
 	assert_not_contains "$TEST_ROOT/empty_${backend}.log" \
 		"Adding additional directory from settings" \
 		"empty array adds no directories ($backend)"
@@ -263,7 +314,7 @@ EOF
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories":
 EOF
-	run_command_case "$backend" "invalid settings json" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/invalid_${backend}.log"
+	run_claude_case "$backend" "invalid settings json" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/invalid_${backend}.log" "$FAKE_CLAUDE_BIN"
 	assert_contains "$TEST_ROOT/invalid_${backend}.log" \
 		"Skipping additionalDirectories from" \
 		"invalid settings file warns ($backend)"
@@ -272,10 +323,19 @@ EOF
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": {"dir": "$EXTRA_DIR_A"}}
 EOF
-	run_command_case "$backend" "wrong-shaped additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/wrongshape_${backend}.log"
+	run_claude_case "$backend" "wrong-shaped additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/wrongshape_${backend}.log" "$FAKE_CLAUDE_BIN"
 	assert_contains "$TEST_ROOT/wrongshape_${backend}.log" \
 		"additionalDirectories must be an array" \
 		"wrong-shaped additionalDirectories warns ($backend)"
+
+	# Test 7: Non-Claude commands ignore Claude project settings
+	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
+{"additionalDirectories": ["$EXTRA_DIR_A"]}
+EOF
+	run_command_case "$backend" "custom command ignores Claude settings" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nonclaude_${backend}.log"
+	assert_not_contains "$TEST_ROOT/nonclaude_${backend}.log" \
+		"additionalDirectories" \
+		"custom command skips Claude settings ($backend)"
 done
 
 echo ""
@@ -308,6 +368,15 @@ run_loader_case "missing python3 and jq warns" "$PROJ_DIR" "$TEST_HOME" "$NO_PAR
 assert_contains "$TEST_ROOT/no_parser.log" \
 	"python3/jq not found" \
 	"missing parsers warning is surfaced"
+
+run_loader_case "pi mode skips Claude settings loader" "$PROJ_DIR" "$TEST_HOME" "$NO_PARSER_BIN" "$TEST_ROOT/pi_mode_skip.log" \
+	'command_flag="pi"; shell_mode=false; if needs_claude_authentication; then load_additional_directories_from_settings; fi; printf "COUNT:%s\n" "${#additional_dirs[@]}"'
+assert_contains "$TEST_ROOT/pi_mode_skip.log" \
+	"COUNT:0" \
+	"pi mode does not load Claude settings"
+assert_not_contains "$TEST_ROOT/pi_mode_skip.log" \
+	"python3/jq not found" \
+	"pi mode skips parser warnings too"
 
 echo ""
 echo "=== Results ==="
