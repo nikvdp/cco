@@ -88,6 +88,25 @@ else
 fi
 
 echo ""
+echo "Test: login keychain paths are trimmed before reuse"
+if (
+	source "$FUNCTIONS_ONLY"
+	security() {
+		if [[ "${1:-}" == "login-keychain" ]]; then
+			printf '    \"/tmp/test-login.keychain-db\"  \n'
+			return 0
+		fi
+		echo "unexpected security invocation: $*" >&2
+		return 1
+	}
+	[[ "$(get_login_keychain_path)" == "/tmp/test-login.keychain-db" ]]
+); then
+	pass "login keychain paths are trimmed"
+else
+	fail "login keychain paths are trimmed"
+fi
+
+echo ""
 echo "Test: OAuth preflight auto-refreshes when --yes is active"
 if (
 	PATH="$FAKE_BIN:$PATH"
@@ -200,6 +219,36 @@ EOF
 else
 	assert_contains "$output" "Because this session is running over SSH, the login keychain is probably locked" "SSH keychain failure explains likely cause"
 	assert_contains "$output" 'Run `security unlock-keychain /tmp/test-login.keychain-db` and then retry cco.' "SSH keychain failure prints unlock command"
+fi
+
+echo ""
+echo "Test: macOS SSH keychain status fallback still offers unlock guidance"
+if output=$(
+	PATH="$FAKE_BIN:$PATH" TEST_ROOT="$TEST_ROOT" FUNCTIONS_ONLY="$FUNCTIONS_ONLY" bash <<'EOF' 2>&1
+set -euo pipefail
+source "$FUNCTIONS_ONLY"
+yes_flag=false
+export SSH_CONNECTION="ssh-test"
+claude_dir="$TEST_ROOT/claude-config-status-fallback"
+mkdir -p "$claude_dir"
+find_claude_config_dir() {
+	printf '%s\n' "$claude_dir"
+}
+capture_macos_keychain_credentials() {
+	keychain_credentials_payload=""
+	keychain_credentials_error="security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain."
+	return 1
+}
+macos_login_keychain_appears_locked() {
+	return 0
+}
+verify_claude_authentication
+EOF
+); then
+	fail "macOS SSH keychain status fallback exits nonzero without --yes"
+else
+	assert_contains "$output" "Because this session is running over SSH, the login keychain is probably locked" "SSH keychain status fallback explains likely cause"
+	assert_contains "$output" 'Run `security unlock-keychain /tmp/test-login.keychain-db` and then retry cco.' "SSH keychain status fallback prints unlock command"
 fi
 
 echo ""
