@@ -198,6 +198,9 @@ cco --env API_KEY=sk-123
 # Additional apt packages
 cco --packages terraform,kubectl
 
+# Auto-accept startup recovery prompts
+cco --yes "review this repo"
+
 # Enable Docker access
 cco --docker-socket
 
@@ -218,6 +221,7 @@ cco --deny-path ~/Downloads
 
 - `--docker-socket` (experimental): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
 - `--force-docker-bridge-network` (Docker only): Force bridge networking instead of host networking. By default cco uses `--network=host` when available (Linux, OrbStack). Use this if you need port isolation or want explicit `-p` port forwarding.
+- `--yes` / `-y`: Auto-accept startup recovery prompts such as OAuth refresh or macOS Keychain unlock before `cco` starts.
 - `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
@@ -500,6 +504,7 @@ cco restore-creds backup-file.json  # Restore from specific backup
 **Authentication issues**
 - Run `claude` first to authenticate
 - Check Claude works outside `cco`
+- On macOS over SSH, `cco` will offer to unlock your login keychain if it cannot read Claude credentials. Use `--yes` to auto-accept that recovery step.
 
 **Token expiration**
 - If you get authentication errors, your OAuth token may have expired
