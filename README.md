@@ -204,12 +204,16 @@ cco --yes "review this repo"
 # Enable Docker access
 cco --docker-socket
 
-# Reuse the default project-scoped Docker container across runs
+# Reuse the default repo-scoped Docker container across runs
 cco --persist
 
-# Select a specific persistent session name for this project
+# Select a specific persistent session name for this repo
 cco --persist=frontend
 cco --persist data-migration
+
+# Attach directly to an existing Docker container by name or ID
+cco --persist-container my-devbox
+cco --persist-container 4d2b9f8c1a6e
 
 # Update cco installation
 cco self-update
@@ -232,10 +236,14 @@ cco --deny-path ~/Downloads
 - `--force-docker-bridge-network` (Docker only): Force bridge networking instead of host networking. By default cco uses `--network=host` when available (Linux, OrbStack). Use this if you need port isolation or want explicit `-p` port forwarding.
 - `--yes` / `-y`: Auto-accept startup recovery prompts such as OAuth refresh or macOS Keychain unlock before `cco` starts.
 - `--allow-oauth-refresh` (experimental): Gives the container write access to your Claude credentials so refreshed tokens sync back to the host. Malicious prompts could corrupt or replace those credentials.
-- `--persist` (Docker only, opt-in): Reuses the default persistent container for the current project instead of starting fresh each run.
-- `--persist=NAME` or `--persist NAME`: Selects a specific persistent session for the current project so you can keep multiple long-lived containers side by side.
+- `--persist` (Docker only, opt-in): Reuses the default persistent container for the current repo instead of starting fresh each run.
+- `--persist=NAME` or `--persist NAME`: Selects a specific persistent session for the current repo so you can keep multiple long-lived containers side by side.
+- `--persist-container TARGET`: Attaches to an existing Docker container by name or ID instead of using cco's managed session naming.
 - Session names use letters, numbers, dot, underscore, or dash. If you want to keep using a subcommand like `shell`, use bare `--persist shell ...` exactly as before for the default session.
 - Persistent sessions keep installed tools and temporary files around, so they weaken the “clean sandbox every time” guarantee. Use them only when you intentionally want session reuse.
+- Repo-scoped persist sessions let sibling git worktrees target the same long-lived container. `cco` will not automatically broaden mounts for later worktrees, so reuse fails clearly if the chosen container does not already expose the current path.
+
+Use `--persist` or `--persist NAME` when you want `cco` to manage the session for a repo. Use `--persist-container TARGET` when you already know the exact container you want to attach to and want that choice to win over `cco`'s naming logic.
 - `--safe` (native only, experimental): **Provides stronger filesystem isolation** by hiding your entire `$HOME` directory from Claude. Only the project directory and explicitly shared paths remain visible. **Trade-off**: Increased security but may cause some tools to fail if they need access to configuration files in `$HOME`. Use `--allow-readonly` to selectively expose needed paths.
 - `--allow-readonly PATH`: Share extra files or directories read-only inside the sandbox.
 - `--deny-path PATH`: Deny read/list/write access to a path so it is fully inaccessible to Claude.
