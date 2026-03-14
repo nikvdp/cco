@@ -2,6 +2,7 @@
 # Regression tests for startup recovery preflights.
 # Covers OAuth refresh prompting, macOS-over-SSH keychain recovery,
 # and the global --yes flag.
+# shellcheck disable=SC1090,SC2030,SC2031,SC2034,SC2317
 
 set -euo pipefail
 
@@ -218,7 +219,7 @@ EOF
 	fail "macOS SSH keychain failure exits nonzero without --yes"
 else
 	assert_contains "$output" "Because this session is running over SSH, the login keychain is probably locked" "SSH keychain failure explains likely cause"
-	assert_contains "$output" 'Run `security unlock-keychain /tmp/test-login.keychain-db` and then retry cco.' "SSH keychain failure prints unlock command"
+	assert_contains "$output" "Run \`security unlock-keychain /tmp/test-login.keychain-db\` and then retry cco." "SSH keychain failure prints unlock command"
 fi
 
 echo ""
@@ -248,7 +249,7 @@ EOF
 	fail "macOS SSH keychain status fallback exits nonzero without --yes"
 else
 	assert_contains "$output" "Because this session is running over SSH, the login keychain is probably locked" "SSH keychain status fallback explains likely cause"
-	assert_contains "$output" 'Run `security unlock-keychain /tmp/test-login.keychain-db` and then retry cco.' "SSH keychain status fallback prints unlock command"
+	assert_contains "$output" "Run \`security unlock-keychain /tmp/test-login.keychain-db\` and then retry cco." "SSH keychain status fallback prints unlock command"
 fi
 
 echo ""
