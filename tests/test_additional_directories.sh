@@ -154,7 +154,7 @@ run_loader_case() {
 
 	cat >"$loader_script" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 warn() { echo "WARN: $*"; }
 log() { :; }
@@ -220,11 +220,15 @@ for backend in native docker; do
 	printf 'host-a' >"$EXTRA_DIR_A/from_host.txt"
 	printf 'host-b' >"$EXTRA_DIR_B/from_host.txt"
 	rm -f "$EXTRA_DIR_A/from_sandbox.txt" "$EXTRA_DIR_B/from_sandbox.txt"
+	EXTRA_DIR_B_IN_SANDBOX="$EXTRA_DIR_B"
+	if [[ "$backend" == "docker" ]]; then
+		EXTRA_DIR_B_IN_SANDBOX="/home/hostuser/${EXTRA_DIR_B#"$TEST_HOME"/}"
+	fi
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["$EXTRA_DIR_A", "$EXTRA_DIR_B"]}
 EOF
 	run_shell_case "$backend" "valid additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/valid_${backend}.log" \
-		"cat \"$EXTRA_DIR_A/from_host.txt\" >/dev/null && cat \"$EXTRA_DIR_B/from_host.txt\" >/dev/null && printf \"$backend-a\" > \"$EXTRA_DIR_A/from_sandbox.txt\" && printf \"$backend-b\" > \"$EXTRA_DIR_B/from_sandbox.txt\""
+		"cat \"$EXTRA_DIR_A/from_host.txt\" >/dev/null && cat \"$EXTRA_DIR_B_IN_SANDBOX/from_host.txt\" >/dev/null && printf \"$backend-a\" > \"$EXTRA_DIR_A/from_sandbox.txt\" && printf \"$backend-b\" > \"$EXTRA_DIR_B_IN_SANDBOX/from_sandbox.txt\""
 	assert_file_content "$EXTRA_DIR_A/from_sandbox.txt" "$backend-a" \
 		"settings allows write access to external dir ($backend)"
 	assert_file_content "$EXTRA_DIR_B/from_sandbox.txt" "$backend-b" \
@@ -285,7 +289,7 @@ if command -v jq >/dev/null 2>&1; then
 {"additionalDirectories": ["$EXTRA_DIR_A"]}
 EOF
 	run_loader_case "jq fallback without python3" "$PROJ_DIR" "$TEST_HOME" "$JQ_ONLY_BIN" "$TEST_ROOT/jq_fallback.log" \
-		'load_additional_directories_from_settings; printf "ADDED:%s\n" "${additional_dirs[0]:-}"'
+		'load_additional_directories_from_settings; if [[ ${#additional_dirs[@]} -gt 0 ]]; then printf "ADDED:%s\n" "${additional_dirs[0]}"; fi'
 	assert_contains "$TEST_ROOT/jq_fallback.log" \
 		"ADDED:$EXTRA_DIR_A" \
 		"jq fallback adds configured directory"
