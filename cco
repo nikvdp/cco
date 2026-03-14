@@ -2084,6 +2084,43 @@ run_container() {
 	fi
 
 	compute_persist_config_hash() {
+		persist_config_docker_args_signature() {
+			local filtered_args=()
+			local project_claude_mount="$current_dir/.claude:$current_dir/.claude"
+			local current_dir_mount="$current_dir:$current_dir"
+			local i=0
+
+			while [[ $i -lt ${#docker_args[@]} ]]; do
+				local arg="${docker_args[$i]}"
+				case "$arg" in
+				-v)
+					local mount_spec="${docker_args[$((i + 1))]}"
+					if [[ "$mount_spec" == "$current_dir_mount" || "$mount_spec" == "$project_claude_mount" ]]; then
+						((i += 2))
+						continue
+					fi
+					filtered_args+=("$arg" "$mount_spec")
+					((i += 2))
+					;;
+				-w)
+					local workdir_arg="${docker_args[$((i + 1))]}"
+					if [[ "$workdir_arg" == "$current_dir" ]]; then
+						((i += 2))
+						continue
+					fi
+					filtered_args+=("$arg" "$workdir_arg")
+					((i += 2))
+					;;
+				*)
+					filtered_args+=("$arg")
+					((i += 1))
+					;;
+				esac
+			done
+
+			printf 'docker_arg=%q\n' "${filtered_args[@]}"
+		}
+
 		local env_file_signature=""
 		if [[ -f ".env" ]]; then
 			env_file_signature=$(hash_string "$(cat .env)")
@@ -2100,7 +2137,7 @@ run_container() {
 			printf 'codex_mode=%s\n' "$codex_mode"
 			printf 'custom_packages=%s\n' "${custom_packages[*]}"
 			printf '.env=%s\n' "$env_file_signature"
-			printf 'docker_args=%s\n' "${docker_args[*]}"
+			persist_config_docker_args_signature
 		)
 		hash_string "$signature"
 	}
