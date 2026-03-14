@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Test additionalDirectories loading from .claude/settings.local.json
-# Verifies valid dirs are added, missing dirs warn, and missing file is silent.
+# Test additionalDirectories loading from .claude/settings.local.json.
+# Verifies configured directories are actually usable inside the sandbox.
 
 set -euo pipefail
 
@@ -73,7 +73,7 @@ assert_not_contains() {
 	fi
 }
 
-run_case() {
+run_command_case() {
 	local backend="$1"
 	local label="$2"
 	local work_dir="$3"
@@ -88,6 +88,45 @@ run_case() {
 		echo "  output:"
 		sed 's/^/    /' "$out_file"
 		fail "$label runs successfully ($backend)"
+	fi
+}
+
+run_shell_case() {
+	local backend="$1"
+	local label="$2"
+	local work_dir="$3"
+	local home_dir="$4"
+	local out_file="$5"
+	local shell_command="$6"
+
+	echo "Test: $label ($backend)"
+	if (cd "$work_dir" && HOME="$home_dir" "$CCO_BIN" --backend "$backend" shell "$shell_command") >"$out_file" 2>&1; then
+		pass "$label runs successfully ($backend)"
+	else
+		echo "  output:"
+		sed 's/^/    /' "$out_file"
+		fail "$label runs successfully ($backend)"
+	fi
+}
+
+assert_file_content() {
+	local file="$1"
+	local expected="$2"
+	local name="$3"
+	local actual=""
+	if [[ -f "$file" ]]; then
+		actual=$(cat "$file")
+	fi
+	if [[ "$actual" == "$expected" ]]; then
+		pass "$name"
+	else
+		echo "  expected file $file to contain: $expected"
+		if [[ -f "$file" ]]; then
+			echo "  actual content: $actual"
+		else
+			echo "  file is missing"
+		fi
+		fail "$name"
 	fi
 }
 
@@ -107,7 +146,7 @@ mkdir -p "$PROJ_DIR/.claude"
 
 # Extra directories to be referenced from settings
 EXTRA_DIR_A="$TEST_ROOT/extra-a"
-EXTRA_DIR_B="$TEST_ROOT/extra-b"
+EXTRA_DIR_B="$TEST_HOME/extra-b"
 mkdir -p "$EXTRA_DIR_A" "$EXTRA_DIR_B"
 
 # Initialize a git repo so cco doesn't complain
@@ -121,30 +160,32 @@ for backend in native docker; do
 		continue
 	fi
 
-	# Test 1: Valid directories are picked up
+	# Test 1: Valid directories are usable inside the sandbox
+	printf 'host-a' >"$EXTRA_DIR_A/from_host.txt"
+	printf 'host-b' >"$EXTRA_DIR_B/from_host.txt"
+	rm -f "$EXTRA_DIR_A/from_sandbox.txt" "$EXTRA_DIR_B/from_sandbox.txt"
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["$EXTRA_DIR_A", "$EXTRA_DIR_B"]}
 EOF
-	run_case "$backend" "valid additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/valid_${backend}.log"
-	assert_contains "$TEST_ROOT/valid_${backend}.log" \
-		"Adding additional directory from settings: $EXTRA_DIR_A" \
-		"settings adds first directory ($backend)"
-	assert_contains "$TEST_ROOT/valid_${backend}.log" \
-		"Adding additional directory from settings: $EXTRA_DIR_B" \
-		"settings adds second directory ($backend)"
+	run_shell_case "$backend" "valid additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/valid_${backend}.log" \
+		"cat \"$EXTRA_DIR_A/from_host.txt\" >/dev/null && cat \"$EXTRA_DIR_B/from_host.txt\" >/dev/null && printf \"$backend-a\" > \"$EXTRA_DIR_A/from_sandbox.txt\" && printf \"$backend-b\" > \"$EXTRA_DIR_B/from_sandbox.txt\""
+	assert_file_content "$EXTRA_DIR_A/from_sandbox.txt" "$backend-a" \
+		"settings allows write access to external dir ($backend)"
+	assert_file_content "$EXTRA_DIR_B/from_sandbox.txt" "$backend-b" \
+		"settings allows write access to home dir ($backend)"
 
 	# Test 2: Non-existent directory produces a warning
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": ["/tmp/no-such-dir-$RANDOM$RANDOM"]}
 EOF
-	run_case "$backend" "non-existent directory" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nodir_${backend}.log"
+	run_command_case "$backend" "non-existent directory" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nodir_${backend}.log"
 	assert_contains "$TEST_ROOT/nodir_${backend}.log" \
 		"Skipping additionalDirectories entry (not a directory)" \
 		"non-existent directory warns ($backend)"
 
 	# Test 3: No settings file — silent, no error
 	rm -f "$PROJ_DIR/.claude/settings.local.json"
-	run_case "$backend" "no settings file" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nosettings_${backend}.log"
+	run_command_case "$backend" "no settings file" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/nosettings_${backend}.log"
 	assert_not_contains "$TEST_ROOT/nosettings_${backend}.log" \
 		"additionalDirectories" \
 		"no settings file produces no additionalDirectories output ($backend)"
@@ -153,10 +194,19 @@ EOF
 	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
 {"additionalDirectories": []}
 EOF
-	run_case "$backend" "empty additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/empty_${backend}.log"
+	run_command_case "$backend" "empty additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/empty_${backend}.log"
 	assert_not_contains "$TEST_ROOT/empty_${backend}.log" \
 		"Adding additional directory from settings" \
 		"empty array adds no directories ($backend)"
+
+	# Test 5: Invalid JSON warns instead of failing silently
+	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
+{"additionalDirectories":
+EOF
+	run_command_case "$backend" "invalid settings json" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/invalid_${backend}.log"
+	assert_contains "$TEST_ROOT/invalid_${backend}.log" \
+		"Skipping additionalDirectories from" \
+		"invalid settings file warns ($backend)"
 done
 
 echo ""
