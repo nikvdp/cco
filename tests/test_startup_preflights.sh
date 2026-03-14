@@ -69,6 +69,25 @@ else
 fi
 
 echo ""
+echo "Test: Claude auth helpers follow the current ~/.claude defaults"
+if (
+	source "$FUNCTIONS_ONLY"
+	export HOME="$TEST_ROOT/helper-home"
+	export XDG_CONFIG_HOME="$TEST_ROOT/helper-xdg"
+	unset CLAUDE_CONFIG_DIR
+	[[ "$(get_claude_config_dir)" == "$HOME/.claude" ]]
+	[[ "$(find_claude_config_dir)" == "$HOME/.claude" ]]
+	CLAUDE_CONFIG_DIR="$TEST_ROOT/custom-claude"
+	expected_hash="$(sha256_prefix8 "$CLAUDE_CONFIG_DIR")"
+	[[ -n "$expected_hash" ]]
+	[[ "$(get_claude_keychain_service_name)" == "Claude Code-credentials-$expected_hash" ]]
+); then
+	pass "Claude auth helpers prefer ~/.claude and hash custom config dirs"
+else
+	fail "Claude auth helpers prefer ~/.claude and hash custom config dirs"
+fi
+
+echo ""
 echo "Test: OAuth preflight auto-refreshes when --yes is active"
 if (
 	PATH="$FAKE_BIN:$PATH"
