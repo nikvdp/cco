@@ -54,6 +54,8 @@ Claude Code runs directly on the host system with full user privileges:
 - **Read/write reality**: Claude's config directories (`~/.claude`, detected config dir, `.claude.json`) are mounted read-write so it can persist preferences and session state.
 - **Credential file access**: The credentials JSON is mounted read-only by default, so Claude cannot update tokens unless `--allow-oauth-refresh` is explicitly enabled.
 - **No image persistence**: Credentials are never baked into the Docker image; temporary files are cleaned up after the session.
+- **Startup recovery helpers**: Before sandbox startup, `cco` may offer two host-side recovery steps when credentials are unusable: `security unlock-keychain ...` for locked macOS login keychains over SSH, and a one-shot plain `claude -p ...` call to refresh expired OAuth credentials when the chosen sandbox cannot safely sync the refresh back.
+- **Consent boundary**: Those startup recovery helpers run only after an interactive confirmation, or automatically when `--yes` / `-y` is supplied. They are additive host-side actions, but they do not grant Claude ongoing general Keychain access or silently widen the sandbox after startup.
 
 ## Threat Model
 
@@ -244,6 +246,22 @@ When enabled (Docker backend only), `cco`:
 - Uses content comparison to detect concurrent modifications
 - Preserves container credentials for manual recovery if sync-back fails
 - Only enables when explicitly requested via `--allow-oauth-refresh`
+
+### Startup Recovery Prompts (`--yes`)
+**Purpose**: Lets `cco` auto-accept startup recovery prompts such as unlocking the macOS login keychain over SSH or running a one-shot plain Claude OAuth refresh before entering the sandbox.
+
+**Security Implications**:
+- **Host-side command execution before sandboxing**: `cco` may run `security unlock-keychain ...` or a plain `claude -p ...` command on the host before the sandbox starts.
+- **Removes an interactive confirmation step**: `--yes` does not add new capabilities by itself, but it does make those recovery actions happen automatically when the preflight detects the relevant failure mode.
+- **Plain-Claude refresh is outside `cco` isolation**: The OAuth recovery helper intentionally runs outside the sandbox so refreshed credentials can land back in the host's normal Claude auth store.
+
+**What this does NOT do**:
+- It does **not** grant Claude unrestricted Keychain access during the session. That still requires `--allow-keychain`, which is a much higher-risk mode.
+- It does **not** make host-side recovery actions available unless the preflight detects a locked keychain or an OAuth refresh problem.
+
+**Recommendation**:
+- Treat `--yes` as a convenience flag for trusted, unattended startup only.
+- Prefer the default interactive confirmation if you want a deliberate checkpoint before any host-side recovery action runs.
 
 ### Keychain Access (`--allow-keychain`)
 **Purpose**: Allows Claude to access macOS Keychain for OAuth token refresh in seatbelt sandbox mode.

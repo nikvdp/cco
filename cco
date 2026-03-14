@@ -298,17 +298,11 @@ check_dependencies() {
 	fi
 }
 
-# Determine Claude Code config directory following priority order:
-# 1. CLAUDE_CONFIG_DIR env var (if set)
-# 2. XDG_CONFIG_HOME/claude or ~/.config/claude (new default since v1.0.30)
-# 3. ~/.claude (legacy fallback)
+# Determine Claude Code config directory following Claude Code's current
+# default behavior, with a legacy ~/.config/claude fallback for older setups.
 get_claude_config_dir() {
-	if [[ -n "$CLAUDE_CONFIG_DIR" ]]; then
+	if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
 		echo "$CLAUDE_CONFIG_DIR"
-	elif [[ -n "$XDG_CONFIG_HOME" ]]; then
-		echo "$XDG_CONFIG_HOME/claude"
-	elif [[ -d "$HOME/.config" ]]; then
-		echo "$HOME/.config/claude"
 	else
 		echo "$HOME/.claude"
 	fi
@@ -318,22 +312,80 @@ get_claude_config_dir() {
 find_claude_config_dir() {
 	local primary_dir
 	primary_dir=$(get_claude_config_dir)
-	local legacy_dir="$HOME/.claude"
+	local legacy_dir="$HOME/.config/claude"
 
-	# Check primary location first
-	if [[ -d "$primary_dir" ]] && [[ -f "$primary_dir/.credentials.json" || -n "$(command -v security)" ]]; then
+	# Check Claude Code's current default location first.
+	if [[ -d "$primary_dir" || -f "$primary_dir/.credentials.json" ]]; then
 		echo "$primary_dir"
 		return
 	fi
 
-	# Fall back to legacy location
-	if [[ -d "$legacy_dir" ]] && [[ -f "$legacy_dir/.credentials.json" || -n "$(command -v security)" ]]; then
+	# Fall back to older XDG-style layouts when present.
+	if [[ -d "$legacy_dir" || -f "$legacy_dir/.credentials.json" ]]; then
 		echo "$legacy_dir"
 		return
 	fi
 
 	# Return primary location for error reporting
 	echo "$primary_dir"
+}
+
+get_claude_keychain_account() {
+	if [[ -n "${USER:-}" ]]; then
+		printf '%s\n' "$USER"
+		return
+	fi
+
+	if id -un >/dev/null 2>&1; then
+		id -un
+		return
+	fi
+
+	printf 'claude-code-user\n'
+}
+
+get_claude_keychain_oauth_suffix() {
+	if [[ -n "${CLAUDE_CODE_CUSTOM_OAUTH_URL:-}" ]]; then
+		printf '%s\n' "-custom-oauth"
+		return
+	fi
+
+	printf '\n'
+}
+
+sha256_prefix8() {
+	local input="$1"
+
+	if command -v shasum >/dev/null 2>&1; then
+		printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 8)}'
+		return
+	fi
+
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 8)}'
+		return
+	fi
+
+	if command -v openssl >/dev/null 2>&1; then
+		printf '%s' "$input" | openssl dgst -sha256 | awk '{print substr($NF, 1, 8)}'
+		return
+	fi
+
+	return 1
+}
+
+get_claude_keychain_service_name() {
+	local oauth_suffix service_name
+	oauth_suffix=$(get_claude_keychain_oauth_suffix)
+	service_name="Claude Code${oauth_suffix}-credentials"
+
+	if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+		local config_hash
+		config_hash=$(sha256_prefix8 "$(get_claude_config_dir)") || return 1
+		service_name="${service_name}-${config_hash}"
+	fi
+
+	printf '%s\n' "$service_name"
 }
 
 # Check if Claude authentication is needed based on the command being run
@@ -352,12 +404,321 @@ needs_claude_authentication() {
 	return 0 # Need Claude auth
 }
 
+# Read the host's current Claude credential payload so startup checks can
+# reason about expiry without teaching cco to perform OAuth itself.
+capture_macos_keychain_credentials() {
+	local payload_file error_file keychain_service keychain_account
+	keychain_credentials_payload=""
+	keychain_credentials_error=""
+	keychain_service=$(get_claude_keychain_service_name) || return 1
+	keychain_account=$(get_claude_keychain_account)
+
+	payload_file=$(mktemp)
+	error_file=$(mktemp)
+
+	if security find-generic-password -s "$keychain_service" -a "$keychain_account" -w >"$payload_file" 2>"$error_file"; then
+		keychain_credentials_payload=$(cat "$payload_file")
+		rm -f "$payload_file" "$error_file"
+		return 0
+	fi
+
+	keychain_credentials_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+	rm -f "$payload_file" "$error_file"
+	return 1
+}
+
+get_claude_credentials_file_path() {
+	local claude_config_dir
+	claude_config_dir=$(find_claude_config_dir)
+	printf '%s/.credentials.json\n' "$claude_config_dir"
+}
+
+get_claude_credentials_payload() {
+	local credentials_file
+	credentials_file=$(get_claude_credentials_file_path)
+
+	if command -v security &>/dev/null; then
+		if capture_macos_keychain_credentials; then
+			printf '%s' "$keychain_credentials_payload"
+			return 0
+		fi
+	fi
+
+	if [[ -f "$credentials_file" ]]; then
+		cat "$credentials_file"
+	fi
+}
+
+extract_oauth_expiry_ms() {
+	local credentials_payload="$1"
+	local expires_at=""
+
+	expires_at=$(printf '%s' "$credentials_payload" | tr -d '\n' | sed -n 's/.*"expiresAt"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+
+	if [[ -z "$expires_at" || ! "$expires_at" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	# Claude currently stores millisecond epochs, but tolerate second epochs.
+	if ((expires_at < 1000000000000)); then
+		expires_at=$((expires_at * 1000))
+	fi
+
+	printf '%s\n' "$expires_at"
+}
+
+oauth_token_needs_startup_refresh() {
+	local expires_at_ms="$1"
+	local now_ms refresh_window_ms
+	now_ms=$(($(date +%s) * 1000))
+	refresh_window_ms=$((10 * 60 * 1000))
+
+	((expires_at_ms <= now_ms + refresh_window_ms))
+}
+
+backend_can_persist_oauth_refresh() {
+	if command -v security &>/dev/null; then
+		if [[ "$SANDBOX_BACKEND" == "native" ]]; then
+			[[ "$allow_keychain" == true ]]
+			return
+		fi
+
+		if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
+			[[ "$allow_oauth_refresh" == true ]]
+			return
+		fi
+
+		return 1
+	fi
+
+	if [[ "$SANDBOX_BACKEND" == "native" ]]; then
+		return 0
+	fi
+
+	if [[ "$SANDBOX_BACKEND" == "docker" && "$allow_oauth_refresh" == true ]]; then
+		return 0
+	fi
+
+	return 1
+}
+
+run_unsandboxed_claude_refresh() {
+	local claude_cmd_str refresh_dir status
+	claude_cmd_str=$(get_claude_command)
+
+	if [[ -z "$claude_cmd_str" ]]; then
+		error "Could not determine which Claude command to use for refresh"
+		return 1
+	fi
+
+	local claude_cmd=()
+	read -ra claude_cmd <<<"$claude_cmd_str"
+	refresh_dir=$(mktemp -d)
+
+	log "Running a one-shot unsandboxed Claude call to refresh OAuth credentials..."
+	(
+		cd "$refresh_dir" || exit 1
+		"${claude_cmd[@]}" -p --output-format text --no-session-persistence "Reply with OK and nothing else."
+	) >/dev/null
+	status=$?
+
+	rm -rf "$refresh_dir"
+	return "$status"
+}
+
+confirm_default_yes() {
+	local prompt="$1"
+	local auto_message="${2:-}"
+
+	if [[ "$yes_flag" == true ]]; then
+		if [[ -n "$auto_message" ]]; then
+			log "$auto_message"
+		fi
+		return 0
+	fi
+
+	if [[ -t 0 && -t 1 ]]; then
+		echo
+		read -p "$prompt [Y/n] " -r
+		if [[ $REPLY =~ ^([Nn])$ ]]; then
+			return 1
+		fi
+		return 0
+	fi
+
+	return 1
+}
+
+is_ssh_session() {
+	[[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]]
+}
+
+looks_like_locked_keychain_error() {
+	local message
+	message=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case "$message" in
+	*"user interaction is not allowed"* | *"interaction is not allowed"* | *"errsecinteractionnotallowed"* | *"cssmerr_csp_no_user_interaction"*)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+get_login_keychain_path() {
+	local login_keychain
+	login_keychain=$(security login-keychain 2>/dev/null | tr -d '"' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | head -n 1)
+	if [[ -n "$login_keychain" ]]; then
+		printf '%s\n' "$login_keychain"
+	else
+		printf '%s/Library/Keychains/login.keychain-db\n' "$HOME"
+	fi
+}
+
+capture_macos_login_keychain_status() {
+	local error_file login_keychain
+	keychain_status_error=""
+	login_keychain=$(get_login_keychain_path)
+	error_file=$(mktemp)
+
+	if security show-keychain-info "$login_keychain" >/dev/null 2>"$error_file"; then
+		keychain_status_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+		rm -f "$error_file"
+		[[ -z "$keychain_status_error" ]]
+		return 0
+	fi
+
+	keychain_status_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+	rm -f "$error_file"
+	return 1
+}
+
+macos_login_keychain_appears_locked() {
+	if ! is_ssh_session; then
+		return 1
+	fi
+
+	if capture_macos_login_keychain_status; then
+		return 1
+	fi
+
+	looks_like_locked_keychain_error "$keychain_status_error"
+}
+
+get_login_keychain_unlock_command() {
+	local login_keychain
+	login_keychain=$(get_login_keychain_path)
+	printf 'security unlock-keychain %q\n' "$login_keychain"
+}
+
+run_macos_keychain_unlock() {
+	local login_keychain
+	login_keychain=$(get_login_keychain_path)
+	security unlock-keychain "$login_keychain"
+}
+
+ensure_accessible_macos_keychain_credentials() {
+	local unlock_command
+
+	if capture_macos_keychain_credentials; then
+		log "Verified Claude Code credentials in macOS Keychain"
+		return 0
+	fi
+
+	if ! is_ssh_session; then
+		return 1
+	fi
+
+	if ! looks_like_locked_keychain_error "$keychain_credentials_error" && ! macos_login_keychain_appears_locked; then
+		return 1
+	fi
+
+	unlock_command=$(get_login_keychain_unlock_command)
+
+	warn "cco could not read Claude Code credentials from the macOS login keychain"
+	warn "Because this session is running over SSH, the login keychain is probably locked"
+
+	if confirm_default_yes \
+		"Unlock the macOS login keychain now so cco can read Claude credentials and continue?" \
+		"--yes enabled; unlocking the macOS login keychain before starting cco"; then
+		if ! run_macos_keychain_unlock; then
+			error "Keychain unlock did not complete successfully"
+			error "Run \`$unlock_command\` and then retry cco."
+			exit 1
+		fi
+
+		if capture_macos_keychain_credentials; then
+			log "Unlocked the macOS login keychain and verified Claude Code credentials"
+			return 0
+		fi
+
+		error "cco still could not read Claude Code credentials after unlocking the login keychain"
+		error "Run plain \`$(get_claude_command)\` and login again if needed, then retry cco."
+		exit 1
+	fi
+
+	error "cco needs access to the macOS login keychain before this session can start"
+	error "Run \`$unlock_command\` and then retry cco."
+	exit 1
+}
+
+ensure_refreshable_oauth_credentials() {
+	local credentials_payload expires_at_ms
+	credentials_payload=$(get_claude_credentials_payload)
+
+	if [[ -z "$credentials_payload" ]]; then
+		return 0
+	fi
+
+	if ! expires_at_ms=$(extract_oauth_expiry_ms "$credentials_payload"); then
+		return 0
+	fi
+
+	if ! oauth_token_needs_startup_refresh "$expires_at_ms"; then
+		return 0
+	fi
+
+	if backend_can_persist_oauth_refresh; then
+		warn "Claude OAuth token is expired or near expiry, but this backend can persist a refresh"
+		return 0
+	fi
+
+	warn "Claude OAuth token is expired or near expiry"
+	warn "This sandbox path cannot safely persist Claude's refresh back to the host credentials"
+
+	if confirm_default_yes \
+		"cco thinks Claude's OAuth token needs a refresh, and this sandbox cannot save the refreshed credentials back to your host. Run a one-shot plain Claude refresh now before starting cco?" \
+		"--yes enabled; refreshing Claude OAuth credentials before starting cco"; then
+		if ! run_unsandboxed_claude_refresh; then
+			error "Claude refresh did not complete successfully"
+			error "Run plain \`$(get_claude_command)\` once outside the sandbox, then retry cco."
+			exit 1
+		fi
+
+		credentials_payload=$(get_claude_credentials_payload)
+		if [[ -n "$credentials_payload" ]] && expires_at_ms=$(extract_oauth_expiry_ms "$credentials_payload"); then
+			if oauth_token_needs_startup_refresh "$expires_at_ms"; then
+				error "Claude credentials still look expired after the refresh attempt"
+				error "Run plain \`$(get_claude_command)\` outside the sandbox, finish any login flow, then retry cco."
+				exit 1
+			fi
+		fi
+
+		log "Claude OAuth credentials refreshed"
+		return 0
+	fi
+
+	error "Claude credentials need an out-of-sandbox refresh before this cco session can start"
+	error "Run plain \`$(get_claude_command)\` once outside the sandbox, then retry cco."
+	exit 1
+}
+
 # Verify Claude Code authentication is available
 verify_claude_authentication() {
 	log "Verifying Claude Code authentication..."
 
-	local claude_config_dir
+	local claude_config_dir credentials_file
 	claude_config_dir=$(find_claude_config_dir)
+	credentials_file=$(get_claude_credentials_file_path)
 
 	# Check if config directory exists
 	if [[ ! -d "$claude_config_dir" ]]; then
@@ -368,13 +729,18 @@ verify_claude_authentication() {
 
 	# Verify credentials exist (simple check, no staging)
 	if command -v security &>/dev/null; then
-		if ! security find-generic-password -s "Claude Code-credentials" -a "$USER" -w >/dev/null 2>&1; then
-			error "No Claude Code credentials found in macOS Keychain"
+		if capture_macos_keychain_credentials; then
+			log "Verified Claude Code credentials in macOS Keychain"
+		elif [[ -f "$credentials_file" ]]; then
+			log "Verified Claude Code credentials file exists"
+		elif is_ssh_session && { looks_like_locked_keychain_error "$keychain_credentials_error" || macos_login_keychain_appears_locked; }; then
+			ensure_accessible_macos_keychain_credentials
+		else
+			error "No Claude Code credentials found in macOS Keychain or credential file"
 			error "Please run \`claude\` and login to authenticate, then try again."
 			exit 1
 		fi
-		log "Verified Claude Code credentials in macOS Keychain"
-	elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
+	elif [[ -f "$credentials_file" ]]; then
 		log "Verified Claude Code credentials file exists"
 	else
 		error "No Claude Code credentials found!"
@@ -411,12 +777,14 @@ sync_credentials_back() {
 
 	# Safety check: Verify system credentials haven't changed during our session
 	local current_system_content=""
-	if command -v security &>/dev/null; then
-		# macOS: Check current Keychain content
-		current_system_content=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || echo "")
-	elif [[ -n "$host_creds_file" && -f "$host_creds_file" ]]; then
-		# Linux: Check current file content
+	if [[ -n "$host_creds_file" && -f "$host_creds_file" ]]; then
+		# File-backed credentials take priority even on macOS.
 		current_system_content=$(cat "$host_creds_file")
+	elif command -v security &>/dev/null; then
+		# macOS: Check current Keychain content
+		if capture_macos_keychain_credentials; then
+			current_system_content="$keychain_credentials_payload"
+		fi
 	fi
 
 	# Abort if system credentials changed during our session
@@ -434,31 +802,8 @@ sync_credentials_back() {
 	backup_timestamp=$(date +"%Y%m%d_%H%M%S")
 
 	# Sync back based on platform
-	if command -v security &>/dev/null; then
-		# macOS: Backup and update Keychain
-		log "Creating backup of original Keychain credentials..."
-		local original_creds
-		original_creds=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || echo "")
-		if [[ -n "$original_creds" ]]; then
-			# Save backup to temp location
-			echo "$original_creds" >"$temp_creds_dir/.credentials.backup.$backup_timestamp.json"
-			log "Backup saved to: $temp_creds_dir/.credentials.backup.$backup_timestamp.json"
-		fi
-
-		# Update Keychain with new credentials
-		local creds_content
-		creds_content=$(cat "$temp_creds_file")
-		if security add-generic-password -U -s "Claude Code-credentials" -a "$USER" -w "$creds_content" >/dev/null 2>&1; then
-			log "Successfully updated credentials in macOS Keychain"
-		else
-			warn "Failed to update macOS Keychain, credentials may be out of sync"
-			if [[ -f "$temp_creds_dir/.credentials.backup.$backup_timestamp.json" ]]; then
-				warn "Original credentials backup available at: $temp_creds_dir/.credentials.backup.$backup_timestamp.json"
-				warn "To restore: security add-generic-password -U -s 'Claude Code-credentials' -a '$USER' -w \"\$(cat '$temp_creds_dir/.credentials.backup.$backup_timestamp.json')\""
-			fi
-		fi
-	elif [[ -n "$host_creds_file" && -f "$host_creds_file" ]]; then
-		# Linux: Backup and update credentials file
+	if [[ -n "$host_creds_file" && -f "$host_creds_file" ]]; then
+		# File-backed credentials on any platform.
 		local backup_file="${host_creds_file}.backup.$backup_timestamp"
 		log "Creating backup of original credentials file..."
 		if cp "$host_creds_file" "$backup_file"; then
@@ -478,6 +823,31 @@ sync_credentials_back() {
 			fi
 		else
 			warn "Failed to create backup, skipping credentials update for safety"
+		fi
+	elif command -v security &>/dev/null; then
+		# macOS: Backup and update Keychain
+		log "Creating backup of original Keychain credentials..."
+		local original_creds keychain_service keychain_account
+		keychain_service=$(get_claude_keychain_service_name)
+		keychain_account=$(get_claude_keychain_account)
+		original_creds=$(security find-generic-password -s "$keychain_service" -a "$keychain_account" -w 2>/dev/null || echo "")
+		if [[ -n "$original_creds" ]]; then
+			# Save backup to temp location
+			echo "$original_creds" >"$temp_creds_dir/.credentials.backup.$backup_timestamp.json"
+			log "Backup saved to: $temp_creds_dir/.credentials.backup.$backup_timestamp.json"
+		fi
+
+		# Update Keychain with new credentials
+		local creds_content
+		creds_content=$(cat "$temp_creds_file")
+		if security add-generic-password -U -s "$keychain_service" -a "$keychain_account" -w "$creds_content" >/dev/null 2>&1; then
+			log "Successfully updated credentials in macOS Keychain"
+		else
+			warn "Failed to update macOS Keychain, credentials may be out of sync"
+			if [[ -f "$temp_creds_dir/.credentials.backup.$backup_timestamp.json" ]]; then
+				warn "Original credentials backup available at: $temp_creds_dir/.credentials.backup.$backup_timestamp.json"
+				warn "To restore: security add-generic-password -U -s '$keychain_service' -a '$keychain_account' -w \"\$(cat '$temp_creds_dir/.credentials.backup.$backup_timestamp.json')\""
+			fi
 		fi
 	fi
 }
@@ -723,8 +1093,10 @@ show_info() {
 			# Check credentials
 			local auth_status="✗ Not authenticated"
 			if command -v security &>/dev/null; then
-				if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w >/dev/null 2>&1; then
+				if capture_macos_keychain_credentials; then
 					auth_status="✓ Authenticated (Keychain)"
+				elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
+					auth_status="✓ Authenticated (File)"
 				fi
 			elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
 				auth_status="✓ Authenticated (File)"
@@ -773,7 +1145,9 @@ show_info() {
 		else
 			local auth_ok=false
 			if command -v security &>/dev/null; then
-				if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w >/dev/null 2>&1; then
+				if capture_macos_keychain_credentials; then
+					auth_ok=true
+				elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
 					auth_ok=true
 				fi
 			elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
@@ -1359,10 +1733,16 @@ run_container() {
 		add_mount_arg "$host_system_claude_dir" "$container_home/.config/claude"
 	fi
 
-	# Extract fresh credentials from keychain for macOS
+	# Extract fresh credentials from macOS, preferring Keychain but falling back
+	# to a plaintext credentials file when that's what Claude is using.
 	if command -v security &>/dev/null; then
-		local keychain_creds
-		keychain_creds=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || echo "")
+		local keychain_creds credentials_file
+		credentials_file="$host_system_claude_dir/.credentials.json"
+		if capture_macos_keychain_credentials; then
+			keychain_creds="$keychain_credentials_payload"
+		else
+			keychain_creds=""
+		fi
 		if [[ -n "$keychain_creds" ]]; then
 			echo "$keychain_creds" >"$temp_creds_dir/.credentials.json"
 			chmod 600 "$temp_creds_dir/.credentials.json"
@@ -1381,6 +1761,23 @@ run_container() {
 			else
 				add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json" "ro"
 				log "Mounting fresh credentials from macOS Keychain (read-only)"
+			fi
+		elif [[ -f "$credentials_file" ]]; then
+			cp "$credentials_file" "$temp_creds_dir/.credentials.json"
+			chmod 600 "$temp_creds_dir/.credentials.json"
+
+			if [[ "$allow_oauth_refresh" = true ]]; then
+				original_creds_content=$(cat "$temp_creds_dir/.credentials.json")
+				startup_system_creds_content=$(cat "$credentials_file")
+				host_creds_file="$credentials_file"
+			fi
+
+			if [[ "$allow_oauth_refresh" = true ]]; then
+				add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json"
+				log "Mounting credentials file from $credentials_file (read-write for OAuth refresh)"
+			else
+				add_mount_arg "$temp_creds_dir/.credentials.json" "$container_home/.claude/.credentials.json" "ro"
+				log "Mounting credentials file from $credentials_file (read-only)"
 			fi
 		fi
 	elif [[ -f "$host_system_claude_dir/.credentials.json" ]]; then
@@ -1495,16 +1892,25 @@ backup_credentials() {
 
 	if command -v security &>/dev/null; then
 		# macOS: Extract from Keychain
-		local keychain_creds
-		keychain_creds=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || echo "")
-		if [[ -n "$keychain_creds" ]]; then
+		local keychain_creds claude_config_dir creds_file
+		if capture_macos_keychain_credentials; then
+			keychain_creds="$keychain_credentials_payload"
 			echo "$keychain_creds" >"$backup_file"
 			chmod 600 "$backup_file"
 			log "Successfully backed up Keychain credentials to: $backup_file"
 			echo "To restore: ./cco restore-creds \"$backup_file\""
 		else
-			error "No Claude Code credentials found in macOS Keychain"
-			exit 1
+			claude_config_dir=$(find_claude_config_dir)
+			creds_file="$claude_config_dir/.credentials.json"
+			if [[ -f "$creds_file" ]]; then
+				cp "$creds_file" "$backup_file"
+				chmod 600 "$backup_file"
+				log "Successfully backed up credentials file to: $backup_file"
+				echo "To restore: ./cco restore-creds \"$backup_file\""
+			else
+				error "No Claude Code credentials found in macOS Keychain or at: $creds_file"
+				exit 1
+			fi
 		fi
 	else
 		# Linux: Copy from credentials file
@@ -1568,11 +1974,17 @@ restore_credentials() {
 	local current_backup_timestamp
 	current_backup_timestamp=$(date +"%Y%m%d_%H%M%S")
 
-	if command -v security &>/dev/null; then
+	local claude_config_dir creds_file
+	claude_config_dir=$(find_claude_config_dir)
+	creds_file="$claude_config_dir/.credentials.json"
+
+	if command -v security &>/dev/null && { capture_macos_keychain_credentials || [[ ! -f "$creds_file" ]]; }; then
 		# macOS: Backup current and restore to Keychain
 		log "Creating backup of current Keychain credentials..."
-		local current_creds
-		current_creds=$(security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || echo "")
+		local current_creds keychain_service keychain_account
+		keychain_service=$(get_claude_keychain_service_name)
+		keychain_account=$(get_claude_keychain_account)
+		current_creds=$(security find-generic-password -s "$keychain_service" -a "$keychain_account" -w 2>/dev/null || echo "")
 		if [[ -n "$current_creds" ]]; then
 			local current_backup_dir="$HOME/.cco-backups"
 			mkdir -p "$current_backup_dir"
@@ -1583,7 +1995,7 @@ restore_credentials() {
 		# Restore from backup file
 		local restore_creds
 		restore_creds=$(cat "$backup_file")
-		if security add-generic-password -U -s "Claude Code-credentials" -a "$USER" -w "$restore_creds" >/dev/null 2>&1; then
+		if security add-generic-password -U -s "$keychain_service" -a "$keychain_account" -w "$restore_creds" >/dev/null 2>&1; then
 			log "Successfully restored credentials to macOS Keychain"
 		else
 			error "Failed to restore credentials to macOS Keychain"
@@ -1591,10 +2003,6 @@ restore_credentials() {
 		fi
 	else
 		# Linux: Backup current and restore to file
-		local claude_config_dir
-		claude_config_dir=$(find_claude_config_dir)
-		local creds_file="$claude_config_dir/.credentials.json"
-
 		# Backup current credentials if they exist
 		if [[ -f "$creds_file" ]]; then
 			local current_backup_file="${creds_file}.pre-restore.$current_backup_timestamp"
@@ -1628,6 +2036,7 @@ allow_keychain=false
 enable_background_tasks=false
 rebuild_image=false
 pull_image=false
+yes_flag=false
 shell_mode=false
 safe_mode=false
 force_bridge_network=false
@@ -1676,6 +2085,10 @@ set -- "${normalized_args[@]}"
 remaining_args=()
 while [[ $# -gt 0 ]]; do
 	case $1 in
+	--yes | -y)
+		yes_flag=true
+		shift
+		;;
 	--backend)
 		if [[ $# -lt 2 ]]; then
 			error "--backend requires an argument (auto, native, docker)"
@@ -1958,6 +2371,7 @@ if [[ $# -gt 0 ]]; then
 		echo "Options:"
 		echo "  --rebuild             Force rebuild Docker image"
 		echo "  --pull                Pull latest image before starting"
+		echo "  --yes, -y             Auto-accept startup recovery prompts"
 		echo "  --version, -v         Show version"
 		echo "  --env, -e KEY=VAL     Set container environment variable"
 		echo "  --packages, -p PKG    Install additional apt packages"
@@ -2040,6 +2454,7 @@ main() {
 	# Only verify Claude authentication if we need it
 	if needs_claude_authentication; then
 		verify_claude_authentication
+		ensure_refreshable_oauth_credentials
 	fi
 
 	# Only handle Docker image operations if using Docker backend
