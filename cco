@@ -564,12 +564,42 @@ looks_like_locked_keychain_error() {
 
 get_login_keychain_path() {
 	local login_keychain
-	login_keychain=$(security login-keychain 2>/dev/null | tr -d '"' | head -n 1)
+	login_keychain=$(security login-keychain 2>/dev/null | tr -d '"' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | head -n 1)
 	if [[ -n "$login_keychain" ]]; then
 		printf '%s\n' "$login_keychain"
 	else
 		printf '%s/Library/Keychains/login.keychain-db\n' "$HOME"
 	fi
+}
+
+capture_macos_login_keychain_status() {
+	local error_file login_keychain
+	keychain_status_error=""
+	login_keychain=$(get_login_keychain_path)
+	error_file=$(mktemp)
+
+	if security show-keychain-info "$login_keychain" >/dev/null 2>"$error_file"; then
+		keychain_status_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+		rm -f "$error_file"
+		[[ -z "$keychain_status_error" ]]
+		return 0
+	fi
+
+	keychain_status_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+	rm -f "$error_file"
+	return 1
+}
+
+macos_login_keychain_appears_locked() {
+	if ! is_ssh_session; then
+		return 1
+	fi
+
+	if capture_macos_login_keychain_status; then
+		return 1
+	fi
+
+	looks_like_locked_keychain_error "$keychain_status_error"
 }
 
 get_login_keychain_unlock_command() {
@@ -592,7 +622,11 @@ ensure_accessible_macos_keychain_credentials() {
 		return 0
 	fi
 
-	if ! is_ssh_session || ! looks_like_locked_keychain_error "$keychain_credentials_error"; then
+	if ! is_ssh_session; then
+		return 1
+	fi
+
+	if ! looks_like_locked_keychain_error "$keychain_credentials_error" && ! macos_login_keychain_appears_locked; then
 		return 1
 	fi
 
@@ -697,7 +731,7 @@ verify_claude_authentication() {
 			log "Verified Claude Code credentials in macOS Keychain"
 		elif [[ -f "$credentials_file" ]]; then
 			log "Verified Claude Code credentials file exists"
-		elif looks_like_locked_keychain_error "$keychain_credentials_error" && is_ssh_session; then
+		elif is_ssh_session && { looks_like_locked_keychain_error "$keychain_credentials_error" || macos_login_keychain_appears_locked; }; then
 			ensure_accessible_macos_keychain_credentials
 		else
 			error "No Claude Code credentials found in macOS Keychain or credential file"
