@@ -81,19 +81,31 @@ TEST_ROOT=$(mktemp -d)
 TEST_HOME="$TEST_ROOT/home"
 TEST_WORKDIR="$TEST_ROOT/cco-persist-test-$$"
 ENV_TEST_WORKDIR="$TEST_ROOT/cco-persist-env-test-$$"
+REPO_WORKDIR="$TEST_ROOT/cco-persist-repo-$$"
+REPO_WORKTREE="$TEST_ROOT/cco-persist-repo-wt-$$"
 mkdir -p "$TEST_HOME" "$TEST_WORKDIR" "$TEST_HOME/.ssh"
-mkdir -p "$ENV_TEST_WORKDIR"
+mkdir -p "$ENV_TEST_WORKDIR" "$REPO_WORKDIR"
+
+git init "$REPO_WORKDIR" >/dev/null
+git -C "$REPO_WORKDIR" config user.email "persist@example.com"
+git -C "$REPO_WORKDIR" config user.name "persist"
+printf 'persist\n' >"$REPO_WORKDIR/README.md"
+git -C "$REPO_WORKDIR" add README.md
+git -C "$REPO_WORKDIR" commit -m "init" >/dev/null
+git -C "$REPO_WORKDIR" worktree add -b persist-worktree "$REPO_WORKTREE" >/dev/null
 
 PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(hash_string "$TEST_WORKDIR")"
 ENV_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$ENV_TEST_WORKDIR")-persist-$(hash_string "$ENV_TEST_WORKDIR")"
 ALPHA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "alpha")-$(hash_string "alpha")-$(hash_string "$TEST_WORKDIR")"
 BETA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "beta")-$(hash_string "beta")-$(hash_string "$TEST_WORKDIR")"
+REPO_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$REPO_WORKDIR")-persist-$(hash_string "$REPO_WORKDIR")"
 
 cleanup_test_artifacts() {
 	docker rm -f "$PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$ENV_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$ALPHA_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$BETA_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$REPO_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
 	rm -rf "$TEST_ROOT"
 }
 
@@ -107,6 +119,20 @@ run_in_test_workdir() {
 run_in_env_test_workdir() {
 	(
 		cd "$ENV_TEST_WORKDIR"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+run_in_repo_workdir() {
+	(
+		cd "$REPO_WORKDIR"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+run_in_repo_worktree() {
+	(
+		cd "$REPO_WORKTREE"
 		HOME="$TEST_HOME" "$CCO_BIN" "$@"
 	)
 }
@@ -271,6 +297,91 @@ else
 	echo "  output:"
 	sed 's/^/    /' "$TEST_ROOT/persist-shell-subcommand.log"
 	fail "persist still allows shell subcommand syntax"
+fi
+
+echo ""
+echo "Test: repo-scoped --persist targets the same session across sibling worktrees"
+if run_in_repo_workdir --backend docker --persist --command bash -lc \
+	'echo repo >/tmp/cco-repo-persist-proof && cat /tmp/cco-repo-persist-proof' \
+	>"$TEST_ROOT/repo-persist-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/repo-persist-first.log" "repo" \
+		"repo-scoped persist creates state from the primary worktree"
+	assert_contains "$TEST_ROOT/repo-persist-first.log" \
+		"Creating persistent container: $REPO_PERSIST_CONTAINER_NAME" \
+		"repo-scoped persist uses the repo identity for the default session"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/repo-persist-first.log"
+	fail "repo-scoped persist creates state from the primary worktree"
+fi
+
+if run_in_repo_worktree --backend docker --persist --command true \
+	>"$TEST_ROOT/repo-persist-second.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/repo-persist-second.log"
+	fail "repo-scoped persist should fail clearly when the sibling worktree path is not mounted"
+else
+	assert_contains "$TEST_ROOT/repo-persist-second.log" \
+		"Reusing persistent container: $REPO_PERSIST_CONTAINER_NAME" \
+		"repo-scoped persist still targets the same container from a sibling worktree"
+	assert_contains "$TEST_ROOT/repo-persist-second.log" \
+		"Persistent container does not expose the current working directory" \
+		"repo-scoped persist fails clearly when the sibling worktree path is unavailable"
+fi
+
+echo ""
+echo "Test: --persist-container attaches to an existing container by name or ID"
+if run_in_test_workdir --backend docker --persist-container "$ALPHA_CONTAINER_NAME" --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-container-name.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-container-name.log" "alpha" \
+		"persist-container can attach by container name"
+	assert_contains "$TEST_ROOT/persist-container-name.log" \
+		"Using persistent container: $ALPHA_CONTAINER_NAME" \
+		"persist-container logs the resolved container name"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-name.log"
+	fail "persist-container can attach by container name"
+fi
+
+ALPHA_CONTAINER_ID=$(docker inspect -f '{{.Id}}' "$ALPHA_CONTAINER_NAME")
+if run_in_test_workdir --backend docker --persist-container "$ALPHA_CONTAINER_ID" --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-container-id.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-container-id.log" "alpha" \
+		"persist-container can attach by container ID"
+	assert_contains "$TEST_ROOT/persist-container-id.log" \
+		"Using persistent container: $ALPHA_CONTAINER_NAME" \
+		"persist-container resolves container IDs back to the canonical name"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-id.log"
+	fail "persist-container can attach by container ID"
+fi
+
+echo ""
+echo "Test: --persist-container fails clearly for missing or incompatible targets"
+if run_in_test_workdir --backend docker --persist-container cco-no-such-container --command true \
+	>"$TEST_ROOT/persist-container-missing.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-missing.log"
+	fail "persist-container should fail when the target container is missing"
+else
+	assert_contains "$TEST_ROOT/persist-container-missing.log" \
+		"Persistent container not found: cco-no-such-container" \
+		"persist-container reports missing targets clearly"
+fi
+
+if run_in_repo_worktree --backend docker --persist-container "$ALPHA_CONTAINER_NAME" --command true \
+	>"$TEST_ROOT/persist-container-workdir.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-workdir.log"
+	fail "persist-container should fail when the target container does not expose the current worktree"
+else
+	assert_contains "$TEST_ROOT/persist-container-workdir.log" \
+		"Persistent container does not expose the current working directory" \
+		"persist-container reports unavailable workdirs clearly"
 fi
 
 echo ""
