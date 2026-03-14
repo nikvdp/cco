@@ -375,7 +375,9 @@ sha256_prefix8() {
 }
 
 get_claude_keychain_service_name() {
-	local service_name="Claude Code$(get_claude_keychain_oauth_suffix)-credentials"
+	local oauth_suffix service_name
+	oauth_suffix=$(get_claude_keychain_oauth_suffix)
+	service_name="Claude Code${oauth_suffix}-credentials"
 
 	if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
 		local config_hash
