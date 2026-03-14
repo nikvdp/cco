@@ -42,6 +42,8 @@ IMAGE_NAME="cco:latest"
 # Sanitize directory name for Docker container naming (only alphanumeric, underscore, dash, dot)
 sanitized_dir=$(basename "$PWD" | tr -c '[:alnum:]._-' '_')
 CONTAINER_NAME=""
+persist_scope_root=""
+persist_scope_slug=""
 
 hash_string() {
 	local input="$1"
@@ -76,20 +78,26 @@ is_known_subcommand() {
 }
 
 generate_container_name() {
-	local current_dir="$PWD"
-	local current_dir_hash
-	current_dir_hash=$(hash_string "$current_dir")
+	if [[ -n "$persist_container_target" ]]; then
+		printf '%s\n' "$persist_container_target"
+		return
+	fi
+
+	local scope_root="${persist_scope_root:-$PWD}"
+	local scope_slug="${persist_scope_slug:-$sanitized_dir}"
+	local scope_root_hash
+	scope_root_hash=$(hash_string "$scope_root")
 	if [[ "$persist_mode" == true ]]; then
 		if [[ -n "$persist_name_flag" ]]; then
 			local persist_name_slug
 			persist_name_slug=$(sanitize_name_fragment "$persist_name_flag")
 			printf 'cco-%s-persist-%s-%s-%s\n' \
-				"$sanitized_dir" \
+				"$scope_slug" \
 				"$persist_name_slug" \
 				"$(hash_string "$persist_name_flag")" \
-				"$current_dir_hash"
+				"$scope_root_hash"
 		else
-			printf 'cco-%s-persist-%s\n' "$sanitized_dir" "$current_dir_hash"
+			printf 'cco-%s-persist-%s\n' "$scope_slug" "$scope_root_hash"
 		fi
 	else
 		printf 'cco-%s-%s-%s\n' "$sanitized_dir" "$(date +%s)" "$$"
@@ -102,6 +110,34 @@ persist_state_root() {
 
 persist_state_dir() {
 	printf '%s/%s\n' "$(persist_state_root)" "$CONTAINER_NAME"
+}
+
+resolve_persist_scope_root() {
+	local git_common_dir_raw git_common_dir
+	if command -v git &>/dev/null; then
+		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
+		if [[ -n "$git_common_dir_raw" ]] && git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+			if [[ "$(basename "$git_common_dir")" == ".git" ]]; then
+				printf '%s\n' "$(dirname "$git_common_dir")"
+			else
+				printf '%s\n' "$git_common_dir"
+			fi
+			return
+		fi
+	fi
+
+	printf '%s\n' "$PWD"
+}
+
+persist_scope_slug_for_root() {
+	local scope_root="$1"
+	local base_name
+	base_name=$(basename "$scope_root")
+	if [[ -n "$base_name" && "$base_name" != "/" && "$base_name" != "." ]]; then
+		sanitize_name_fragment "$base_name"
+	else
+		printf 'workspace\n'
+	fi
 }
 
 # Detect available sandbox backends
@@ -1509,7 +1545,7 @@ run_container() {
 	host_gid=$(id -g)
 	local current_dir="$PWD"
 	local persist_state_dir_path=""
-	if [[ "$persist_mode" == true ]]; then
+	if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 		persist_state_dir_path=$(persist_state_dir)
 		mkdir -p "$persist_state_dir_path"
 	fi
@@ -1606,6 +1642,17 @@ run_container() {
 		[[ -n "$(docker ps -q -f "name=^${CONTAINER_NAME}$")" ]]
 	}
 
+	resolve_persist_target_container_name() {
+		local target="$1"
+		local container_name
+		container_name=$(docker inspect -f '{{.Name}}' "$target" 2>/dev/null || true)
+		if [[ -z "$container_name" ]]; then
+			error "Persistent container not found: $target"
+			return 1
+		fi
+		printf '%s\n' "${container_name#/}"
+	}
+
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
 	local container_path="$container_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1660,7 +1707,7 @@ run_container() {
 	create_deny_overlay_source() {
 		local blocked_path="$1"
 		local overlay_path=""
-		if [[ "$persist_mode" == true ]]; then
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 			local deny_hash
 			deny_hash=$(hash_string "$blocked_path")
 			overlay_path="$persist_state_dir_path/deny/$deny_hash"
@@ -1685,7 +1732,7 @@ run_container() {
 	# bypass mode inside cco's outer sandbox.
 	if [[ "$codex_mode" == true ]]; then
 		local codex_shim_dir
-		if [[ "$persist_mode" == true ]]; then
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 			codex_shim_dir="$persist_state_dir_path/codex-shim"
 			if [[ ! -x "$codex_shim_dir/codex" ]]; then
 				local temp_codex_shim_dir
@@ -1903,7 +1950,7 @@ run_container() {
 
 	# Create temporary directory for credentials extraction
 	local temp_creds_dir
-	if [[ "$persist_mode" == true ]]; then
+	if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 		temp_creds_dir="$persist_state_dir_path/creds"
 		mkdir -p "$temp_creds_dir"
 	else
@@ -1915,13 +1962,13 @@ run_container() {
 
 	# Setup cleanup and credentials sync-back on exit
 	if [[ "$allow_oauth_refresh" = true ]]; then
-		if [[ "$persist_mode" == true ]]; then
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content"; cleanup_docker_overlays' EXIT
 		else
 			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
 		fi
 	else
-		if [[ "$persist_mode" == true ]]; then
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
 			trap 'cleanup_docker_overlays' EXIT
 		else
 			trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
@@ -2044,7 +2091,7 @@ run_container() {
 		local signature
 		signature=$(
 			printf 'image=%s\n' "$IMAGE_NAME"
-			printf 'current_dir=%s\n' "$current_dir"
+			printf 'persist_scope_root=%s\n' "${persist_scope_root:-$current_dir}"
 			printf 'host_uid=%s\n' "$host_uid"
 			printf 'host_gid=%s\n' "$host_gid"
 			printf 'docker_access=%s\n' "$docker_access"
@@ -2077,6 +2124,21 @@ run_container() {
 			done
 		) >/dev/null 2>&1 &
 		echo $!
+	}
+
+	ensure_requested_workdir_is_available() {
+		if docker exec \
+			-u "${host_uid}:${host_gid}" \
+			-e "HOME=$container_home" \
+			-e "PATH=$persistent_exec_path" \
+			"$CONTAINER_NAME" \
+			sh -lc 'test -d "$1"' sh "$current_dir" >/dev/null 2>&1; then
+			return 0
+		fi
+
+		error "Persistent container does not expose the current working directory: $current_dir"
+		error "Use a different session, attach to another container, or recreate this container from a broader starting point."
+		return 1
 	}
 
 	ensure_persistent_container() {
@@ -2125,6 +2187,10 @@ run_container() {
 			"$CONTAINER_NAME"
 		)
 
+		if ! ensure_requested_workdir_is_available; then
+			return 1
+		fi
+
 		if [[ "$shell_mode" = true ]]; then
 			if [[ ${#claude_args[@]} -eq 0 ]]; then
 				if [[ -n "$tty_flag" ]]; then
@@ -2158,10 +2224,20 @@ run_container() {
 
 	# Run the container (entrypoint will handle user setup)
 	local run_status=0
-	if [[ "$persist_mode" == true ]]; then
-		local persist_config_hash
-		persist_config_hash=$(compute_persist_config_hash)
-		ensure_persistent_container "$persist_config_hash"
+	if [[ "$persist_mode" == true || -n "$persist_container_target" ]]; then
+		if [[ -n "$persist_container_target" ]]; then
+			CONTAINER_NAME=$(resolve_persist_target_container_name "$persist_container_target") || return 1
+			if container_is_running; then
+				log "Using persistent container: $CONTAINER_NAME"
+			else
+				log "Starting persistent container: $CONTAINER_NAME"
+				docker start "$CONTAINER_NAME" >/dev/null
+			fi
+		else
+			local persist_config_hash
+			persist_config_hash=$(compute_persist_config_hash)
+			ensure_persistent_container "$persist_config_hash" || return 1
+		fi
 		run_persistent_command
 		run_status=$?
 	else
@@ -2386,6 +2462,7 @@ shell_mode=false
 safe_mode=false
 persist_mode=false
 persist_name_flag=""
+persist_container_target=""
 force_bridge_network=false
 allow_external_git_dir=false
 enable_git_worktree_common_dir=true
@@ -2484,6 +2561,14 @@ while [[ $# -gt 0 ]]; do
 			exit 1
 		fi
 		shift
+		;;
+	--persist-container)
+		if [[ $# -lt 2 ]]; then
+			error "--persist-container requires a container name or ID"
+			exit 1
+		fi
+		persist_container_target="$2"
+		shift 2
 		;;
 	--allow-oauth-refresh)
 		allow_oauth_refresh=true
@@ -2625,6 +2710,9 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+persist_scope_root=$(resolve_persist_scope_root)
+persist_scope_slug=$(persist_scope_slug_for_root "$persist_scope_root")
+
 # Now handle subcommands with remaining args
 set -- "${remaining_args[@]}"
 CONTAINER_NAME=$(generate_container_name)
@@ -2762,6 +2850,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
 		echo "  --persist[=NAME]      Reuse a Docker container for this project (Docker only)"
 		echo "                        Also accepts: --persist NAME"
+		echo "  --persist-container   Attach to an existing Docker container by name or ID"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
@@ -2820,8 +2909,8 @@ main() {
 	detect_sandbox_backend "$SANDBOX_BACKEND"
 	apply_agent_arg_policies
 
-	if [[ "$persist_mode" == true && "$SANDBOX_BACKEND" != "docker" ]]; then
-		error "--persist is only supported with the Docker backend"
+	if [[ ("$persist_mode" == true || -n "$persist_container_target") && "$SANDBOX_BACKEND" != "docker" ]]; then
+		error "--persist and --persist-container are only supported with the Docker backend"
 		exit 1
 	fi
 
