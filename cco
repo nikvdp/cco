@@ -373,16 +373,25 @@ capture_macos_keychain_credentials() {
 	return 1
 }
 
-get_claude_credentials_payload() {
+get_claude_credentials_file_path() {
 	local claude_config_dir
 	claude_config_dir=$(find_claude_config_dir)
+	printf '%s/.credentials.json\n' "$claude_config_dir"
+}
+
+get_claude_credentials_payload() {
+	local credentials_file
+	credentials_file=$(get_claude_credentials_file_path)
 
 	if command -v security &>/dev/null; then
 		if capture_macos_keychain_credentials; then
 			printf '%s' "$keychain_credentials_payload"
+			return 0
 		fi
-	elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
-		cat "$claude_config_dir/.credentials.json"
+	fi
+
+	if [[ -f "$credentials_file" ]]; then
+		cat "$credentials_file"
 	fi
 }
 
@@ -619,8 +628,9 @@ ensure_refreshable_oauth_credentials() {
 verify_claude_authentication() {
 	log "Verifying Claude Code authentication..."
 
-	local claude_config_dir
+	local claude_config_dir credentials_file
 	claude_config_dir=$(find_claude_config_dir)
+	credentials_file=$(get_claude_credentials_file_path)
 
 	# Check if config directory exists
 	if [[ ! -d "$claude_config_dir" ]]; then
@@ -631,12 +641,18 @@ verify_claude_authentication() {
 
 	# Verify credentials exist (simple check, no staging)
 	if command -v security &>/dev/null; then
-		if ! ensure_accessible_macos_keychain_credentials; then
+		if capture_macos_keychain_credentials; then
+			log "Verified Claude Code credentials in macOS Keychain"
+		elif [[ -f "$credentials_file" ]]; then
+			log "Verified Claude Code credentials file exists"
+		elif looks_like_locked_keychain_error "$keychain_credentials_error" && is_ssh_session; then
+			ensure_accessible_macos_keychain_credentials
+		else
 			error "No Claude Code credentials found in macOS Keychain"
 			error "Please run \`claude\` and login to authenticate, then try again."
 			exit 1
 		fi
-	elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
+	elif [[ -f "$credentials_file" ]]; then
 		log "Verified Claude Code credentials file exists"
 	else
 		error "No Claude Code credentials found!"
