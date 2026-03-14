@@ -388,7 +388,8 @@ load_additional_directories_from_settings() {
 
 	local dirs parse_output parse_error parse_status
 	if [[ "$parser" == "python3" ]]; then
-		if parse_output=$(python3 - "$settings_file" 2>&1 <<'PY'
+		if parse_output=$(
+			python3 - "$settings_file" 2>&1 <<'PY'
 import json
 import sys
 
@@ -455,7 +456,7 @@ PY
 		else
 			warn "Skipping additionalDirectories entry (not a directory): $dir"
 		fi
-	done <<< "$dirs"
+	done <<<"$dirs"
 }
 
 # Check if Docker is available (only when using Docker backend)
