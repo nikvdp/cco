@@ -38,7 +38,8 @@ else
 	CCO_INSTALLATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-IMAGE_NAME="cco:latest"
+DEFAULT_IMAGE_NAME="cco:latest"
+IMAGE_NAME="$DEFAULT_IMAGE_NAME"
 # Sanitize directory name for Docker container naming (only alphanumeric, underscore, dash, dot)
 sanitized_dir=$(basename "$PWD" | tr -c '[:alnum:]._-' '_')
 CONTAINER_NAME=""
@@ -75,6 +76,10 @@ is_known_subcommand() {
 		return 1
 		;;
 	esac
+}
+
+using_custom_docker_image() {
+	[[ -n "$docker_image_override" ]]
 }
 
 generate_container_name() {
@@ -1041,6 +1046,10 @@ sync_credentials_back() {
 
 # Check if we should use pre-built image
 should_use_prebuilt_image() {
+	if using_custom_docker_image; then
+		return 1
+	fi
+
 	# Don't use pre-built if explicitly rebuilding
 	if [[ "$rebuild_image" = true ]]; then
 		return 1
@@ -1252,9 +1261,17 @@ show_info() {
 			if docker image inspect "$IMAGE_NAME" &>/dev/null; then
 				local image_created
 				image_created=$(docker image inspect "$IMAGE_NAME" --format '{{.Created}}' | cut -d'T' -f1)
-				echo "  cco Image: ✓ Built ($image_created)"
+				if using_custom_docker_image; then
+					echo "  Docker Image: ✓ Available ($IMAGE_NAME, $image_created)"
+				else
+					echo "  cco Image: ✓ Built ($image_created)"
+				fi
 			else
-				echo "  cco Image: ✗ Not built (run with --rebuild)"
+				if using_custom_docker_image; then
+					echo "  Docker Image: ✗ Not present locally ($IMAGE_NAME)"
+				else
+					echo "  cco Image: ✗ Not built (run with --rebuild)"
+				fi
 			fi
 		else
 			echo "  Docker Daemon: ✗ Not running"
@@ -2501,6 +2518,7 @@ safe_mode=false
 persist_mode=false
 persist_name_flag=""
 persist_container_target=""
+docker_image_override=""
 force_bridge_network=false
 allow_external_git_dir=false
 enable_git_worktree_common_dir=true
@@ -2606,6 +2624,18 @@ while [[ $# -gt 0 ]]; do
 			exit 1
 		fi
 		persist_container_target="$2"
+		shift 2
+		;;
+	--image | --docker-image)
+		if [[ $# -lt 2 ]]; then
+			error "$1 requires a Docker image name"
+			exit 1
+		fi
+		docker_image_override="$2"
+		if [[ -z "$docker_image_override" ]]; then
+			error "$1 requires a non-empty Docker image name"
+			exit 1
+		fi
 		shift 2
 		;;
 	--allow-oauth-refresh)
@@ -2750,6 +2780,9 @@ done
 
 persist_scope_root=$(resolve_persist_scope_root)
 persist_scope_slug=$(persist_scope_slug_for_root "$persist_scope_root")
+if using_custom_docker_image; then
+	IMAGE_NAME="$docker_image_override"
+fi
 
 # Now handle subcommands with remaining args
 set -- "${remaining_args[@]}"
@@ -2829,6 +2862,13 @@ if [[ $# -gt 0 ]]; then
 		exit 0
 		;;
 	pull)
+		if using_custom_docker_image; then
+			log "Pulling Docker image: $IMAGE_NAME"
+			check_dependencies
+			docker pull "$IMAGE_NAME"
+			log "Pull completed successfully"
+			exit 0
+		fi
 		log "Pulling latest pre-built image..."
 		check_dependencies
 		if pull_prebuilt_image; then
@@ -2840,6 +2880,10 @@ if [[ $# -gt 0 ]]; then
 		exit 0
 		;;
 	rebuild)
+		if using_custom_docker_image; then
+			error "rebuild cannot be used with --image or --docker-image"
+			exit 1
+		fi
 		log "Rebuilding cco image..."
 		check_dependencies
 		build_image
@@ -2886,6 +2930,8 @@ if [[ $# -gt 0 ]]; then
 		echo "  --disable-git-worktree-common-dir"
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --image IMAGE         Run Docker sessions from a specific image"
+		echo "  --docker-image IMAGE  Alias for --image"
 		echo "  --persist[=NAME]      Reuse a Docker container for this repo (Docker only)"
 		echo "                        Also accepts: --persist NAME"
 		echo "  --persist-container   Attach to an existing Docker container by name or ID"
@@ -2952,6 +2998,11 @@ main() {
 		exit 1
 	fi
 
+	if [[ -n "$docker_image_override" && "$SANDBOX_BACKEND" != "docker" ]]; then
+		error "--image and --docker-image are only supported with the Docker backend"
+		exit 1
+	fi
+
 	# Check dependencies based on backend
 	check_dependencies
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
@@ -2970,44 +3021,69 @@ main() {
 
 	# Only handle Docker image operations if using Docker backend
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
-		# Handle --pull flag first
-		if [[ "$pull_image" = true ]]; then
-			log "Pulling latest pre-built image..."
-			if pull_prebuilt_image; then
-				log "Pull completed successfully"
-			else
-				warn "Failed to pull pre-built image, using existing or building locally"
+		if using_custom_docker_image; then
+			if [[ "$rebuild_image" = true ]]; then
+				error "--rebuild cannot be used with --image or --docker-image"
+				exit 1
+			fi
+			if [[ ${#custom_packages[@]} -gt 0 ]]; then
+				error "--packages cannot be used with --image or --docker-image"
+				exit 1
 			fi
 		fi
 
-		# Determine whether to pull pre-built image or build locally
-		if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-			# No local image exists
-			if should_use_prebuilt_image; then
-				# Try to pull pre-built image, fallback to build
-				if ! pull_prebuilt_image; then
+		# Handle --pull flag first
+		if [[ "$pull_image" = true ]]; then
+			if using_custom_docker_image; then
+				log "Pulling Docker image: $IMAGE_NAME"
+				docker pull "$IMAGE_NAME"
+				log "Pull completed successfully"
+			else
+				log "Pulling latest pre-built image..."
+				if pull_prebuilt_image; then
+					log "Pull completed successfully"
+				else
+					warn "Failed to pull pre-built image, using existing or building locally"
+				fi
+			fi
+		fi
+
+		if using_custom_docker_image; then
+			if docker image inspect "$IMAGE_NAME" &>/dev/null; then
+				log "Using custom Docker image: $IMAGE_NAME"
+			else
+				log "Using custom Docker image: $IMAGE_NAME (Docker will pull it on first run if needed)"
+			fi
+		else
+			# Determine whether to pull pre-built image or build locally
+			if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+				# No local image exists
+				if should_use_prebuilt_image; then
+					# Try to pull pre-built image, fallback to build
+					if ! pull_prebuilt_image; then
+						build_image
+					fi
+				else
+					# Build locally due to customizations
+					if [[ "$rebuild_image" = true ]]; then
+						log "Rebuilding cco image..."
+					elif [[ ${#custom_packages[@]} -gt 0 ]]; then
+						log "Custom packages specified, building image..."
+					fi
 					build_image
 				fi
-			else
-				# Build locally due to customizations
-				if [[ "$rebuild_image" = true ]]; then
-					log "Rebuilding cco image..."
-				elif [[ ${#custom_packages[@]} -gt 0 ]]; then
+			elif [[ "$rebuild_image" = true ]] || [[ ${#custom_packages[@]} -gt 0 ]]; then
+				# Force rebuild requested or customizations specified
+				if [[ ${#custom_packages[@]} -gt 0 ]]; then
 					log "Custom packages specified, building image..."
+				else
+					log "Rebuilding cco image..."
 				fi
+				docker image rm "$IMAGE_NAME" &>/dev/null || true
 				build_image
-			fi
-		elif [[ "$rebuild_image" = true ]] || [[ ${#custom_packages[@]} -gt 0 ]]; then
-			# Force rebuild requested or customizations specified
-			if [[ ${#custom_packages[@]} -gt 0 ]]; then
-				log "Custom packages specified, rebuilding image..."
 			else
-				log "Rebuilding cco image..."
+				log "Using existing cco image"
 			fi
-			docker image rm "$IMAGE_NAME" &>/dev/null || true
-			build_image
-		else
-			log "Using existing cco image"
 		fi
 	fi
 
