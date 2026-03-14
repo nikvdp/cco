@@ -2590,8 +2590,11 @@ main() {
 		fi
 	fi
 
-	# Load additionalDirectories from .claude/settings.local.json
-	load_additional_directories_from_settings
+	# additionalDirectories from Claude project settings should only affect
+	# actual Claude launches, not other frontends or arbitrary commands.
+	if needs_claude_authentication; then
+		load_additional_directories_from_settings
+	fi
 
 	# If inside a git worktree, the object store lives in the main repo's
 	# .git directory, not the worktree. Add it as an additional dir so both
