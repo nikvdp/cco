@@ -138,7 +138,7 @@ Claude Code runs directly on the host system with full user privileges:
 
 | Path / Resource | Access | Notes |
 | ---------------- | ------ | ----- |
-| Current project directory | Read/write | Primary working tree (plus any paths passed with `--add-dir`) |
+| Current project directory | Read/write | Primary working tree (plus any paths passed with `--add-dir` or local Claude `additionalDirectories`) |
 | `~/.claude` | Read/write | Session state, MCP configs, logs |
 | Detected config directory (`$XDG_CONFIG_HOME/claude` or `~/.claude`) | Read/write | Needed for new Claude CLI defaults |
 | `~/.claude.json` | Read/write | CLI top-level state file |
@@ -160,6 +160,7 @@ Claude Code runs directly on the host system with full user privileges:
 - Use `--allow-readonly PATH` to share specific files/directories read-only without granting write access.
 - Use `--deny-path PATH` to hide a path entirely (appears empty/blocked inside the sandbox). In Docker/bubblewrap this is implemented with empty overlays; in Seatbelt it raises access errors.
 - `--add-dir PATH[:ro|:rw]` lets you control permissions inline when mounting additional content.
+- Claude Code's local `.claude/settings.local.json` can also contribute read/write mounts through its `additionalDirectories` array. `cco` treats those entries like local `--add-dir PATH:rw` rules and warns if the file exists but cannot be parsed.
 - Git worktree support auto-detects `git rev-parse --git-common-dir` only for trusted git layouts. Use `--disable-git-worktree-common-dir` if you want fully manual control and no auto-added git paths.
 
 ## Terminal Injection Attacks (Linux)

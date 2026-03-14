@@ -219,6 +219,8 @@ cco --allow-readonly ~/.ssh
 cco --deny-path ~/Downloads
 ```
 
+`cco` also honors Claude Code's local project settings file at `.claude/settings.local.json`. If that file contains an `additionalDirectories` array, those directories are mounted read/write the same way as `--add-dir PATH:rw`. `cco` parses that file with `python3` when available and falls back to `jq`; if neither tool exists it prints a warning and skips those extra mounts.
+
 - `--docker-socket` (experimental): Binds the host Docker socket into the sandbox so Claude can control Docker on your machine. This defeats the isolation barrier—avoid unless you explicitly need host Docker access.
 - `--force-docker-bridge-network` (Docker only): Force bridge networking instead of host networking. By default cco uses `--network=host` when available (Linux, OrbStack). Use this if you need port isolation or want explicit `-p` port forwarding.
 - `--yes` / `-y`: Auto-accept startup recovery prompts such as OAuth refresh or macOS Keychain unlock before `cco` starts.

@@ -272,6 +272,96 @@ handle_add_dir_entry() {
 	esac
 }
 
+# Parse additionalDirectories from .claude/settings.local.json
+# Prefer python3 for portability and fall back to jq when available.
+load_additional_directories_from_settings() {
+	local settings_file="$PWD/.claude/settings.local.json"
+	if [[ ! -f "$settings_file" ]]; then
+		return
+	fi
+
+	local parser=""
+	if command -v python3 &>/dev/null; then
+		parser="python3"
+	elif command -v jq &>/dev/null; then
+		parser="jq"
+	else
+		warn "python3/jq not found; skipping additionalDirectories from $settings_file"
+		return
+	fi
+
+	local dirs parse_output parse_error parse_status
+	if [[ "$parser" == "python3" ]]; then
+		if parse_output=$(python3 - "$settings_file" 2>&1 <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    print(f"Unable to parse settings.local.json: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+directories = data.get("additionalDirectories", [])
+if directories is None:
+    sys.exit(0)
+if not isinstance(directories, list):
+    print("Unable to parse settings.local.json: additionalDirectories must be an array", file=sys.stderr)
+    sys.exit(1)
+
+for entry in directories:
+    if isinstance(entry, str):
+        print(entry)
+PY
+		); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	else
+		if parse_output=$(jq -r '
+			(.additionalDirectories // []) as $dirs
+			| if ($dirs | type) != "array" then
+				error("Unable to parse settings.local.json: additionalDirectories must be an array")
+			  else
+				$dirs[]
+			  end
+			| select(type == "string")
+		' "$settings_file" 2>&1); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	fi
+
+	if [[ $parse_status -ne 0 ]]; then
+		parse_error=$(printf '%s' "$parse_output" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+		if [[ -z "$parse_error" ]]; then
+			parse_error="Unable to parse settings.local.json"
+		fi
+		warn "Skipping additionalDirectories from $settings_file: $parse_error"
+		return
+	fi
+
+	dirs="$parse_output"
+
+	local dir
+	while IFS= read -r dir; do
+		[[ -z "$dir" ]] && continue
+		local resolved
+		resolved=$(resolve_path "$dir")
+		if [[ -n "$resolved" && -d "$resolved" ]]; then
+			if ! path_in_array "$resolved" "${additional_dirs[@]}"; then
+				add_rw_path "$resolved"
+				log "Adding additional directory from settings: $resolved"
+			fi
+		else
+			warn "Skipping additionalDirectories entry (not a directory): $dir"
+		fi
+	done <<< "$dirs"
+}
+
 # Check if Docker is available (only when using Docker backend)
 check_docker_dependencies() {
 	# Check for Docker
@@ -2498,6 +2588,12 @@ main() {
 		else
 			log "Using existing cco image"
 		fi
+	fi
+
+	# additionalDirectories from Claude project settings should only affect
+	# actual Claude launches, not other frontends or arbitrary commands.
+	if needs_claude_authentication; then
+		load_additional_directories_from_settings
 	fi
 
 	# If inside a git worktree, the object store lives in the main repo's
