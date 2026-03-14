@@ -273,26 +273,78 @@ handle_add_dir_entry() {
 }
 
 # Parse additionalDirectories from .claude/settings.local.json
-# Uses python3 for JSON parsing; silently skips if python3 is unavailable
+# Prefer python3 for portability and fall back to jq when available.
 load_additional_directories_from_settings() {
 	local settings_file="$PWD/.claude/settings.local.json"
 	if [[ ! -f "$settings_file" ]]; then
 		return
 	fi
-	if ! command -v python3 &>/dev/null; then
-		warn "python3 not found; skipping additionalDirectories from $settings_file"
+
+	local parser=""
+	if command -v python3 &>/dev/null; then
+		parser="python3"
+	elif command -v jq &>/dev/null; then
+		parser="jq"
+	else
+		warn "python3/jq not found; skipping additionalDirectories from $settings_file"
 		return
 	fi
-	local dirs
-	dirs=$(python3 -c "
-import json, sys
+
+	local dirs parse_output parse_error parse_status
+	if [[ "$parser" == "python3" ]]; then
+		if parse_output=$(python3 - "$settings_file" 2>&1 <<'PY'
+import json
+import sys
+
 try:
-    data = json.load(open(sys.argv[1]))
-    for d in data.get('additionalDirectories', []):
-        print(d)
-except Exception:
-    pass
-" "$settings_file" 2>/dev/null) || true
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception as exc:
+    print(f"Unable to parse settings.local.json: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+directories = data.get("additionalDirectories", [])
+if directories is None:
+    sys.exit(0)
+if not isinstance(directories, list):
+    print("Unable to parse settings.local.json: additionalDirectories must be an array", file=sys.stderr)
+    sys.exit(1)
+
+for entry in directories:
+    if isinstance(entry, str):
+        print(entry)
+PY
+		); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	else
+		if parse_output=$(jq -r '
+			(.additionalDirectories // []) as $dirs
+			| if ($dirs | type) != "array" then
+				error("Unable to parse settings.local.json: additionalDirectories must be an array")
+			  else
+				$dirs[]
+			  end
+			| select(type == "string")
+		' "$settings_file" 2>&1); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	fi
+
+	if [[ $parse_status -ne 0 ]]; then
+		parse_error=$(printf '%s' "$parse_output" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+		if [[ -z "$parse_error" ]]; then
+			parse_error="Unable to parse settings.local.json"
+		fi
+		warn "Skipping additionalDirectories from $settings_file: $parse_error"
+		return
+	fi
+
+	dirs="$parse_output"
 
 	local dir
 	while IFS= read -r dir; do
