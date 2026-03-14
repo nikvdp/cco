@@ -124,11 +124,36 @@ if (
 	}
 	verify_claude_authentication
 	[[ "$unlock_attempts" -eq 1 ]]
-	[[ "$keychain_attempts" -eq 2 ]]
+	[[ "$keychain_attempts" -eq 3 ]]
 ); then
 	pass "macOS SSH keychain recovery auto-unlocks with --yes"
 else
 	fail "macOS SSH keychain recovery auto-unlocks with --yes"
+fi
+
+echo ""
+echo "Test: file-backed credentials still work when macOS keychain lookup misses"
+if (
+	PATH="$FAKE_BIN:$PATH"
+	source "$FUNCTIONS_ONLY"
+	yes_flag=false
+	claude_dir="$TEST_ROOT/claude-config-file"
+	mkdir -p "$claude_dir"
+	printf '{"accessToken":"from-file"}\n' >"$claude_dir/.credentials.json"
+	find_claude_config_dir() {
+		printf '%s\n' "$claude_dir"
+	}
+	capture_macos_keychain_credentials() {
+		keychain_credentials_payload=""
+		keychain_credentials_error="security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain."
+		return 1
+	}
+	verify_claude_authentication
+	[[ "$(get_claude_credentials_payload)" == '{"accessToken":"from-file"}' ]]
+); then
+	pass "file-backed credentials work when macOS keychain lookup misses"
+else
+	fail "file-backed credentials work when macOS keychain lookup misses"
 fi
 
 echo ""
