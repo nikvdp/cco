@@ -56,11 +56,42 @@ hash_string() {
 }
 
 sanitize_dir_name() {
-	basename "$1" | tr -c '[:alnum:]._-' '_'
+	printf '%s' "$(basename "$1")" | tr -c '[:alnum:]._-' '_'
 }
 
 sanitize_name_fragment() {
 	printf '%s' "$1" | tr -c '[:alnum:]._-' '_' | cut -c1-40
+}
+
+resolve_existing_dir() {
+	local input="$1"
+	if [[ ! -d "$input" ]]; then
+		return 1
+	fi
+	(cd "$input" && pwd -P)
+}
+
+resolve_persist_scope_root() {
+	local dir="$1"
+	local git_common_dir_raw=""
+	local git_common_dir=""
+
+	git_common_dir_raw="$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null)" || true
+	if [[ -n "$git_common_dir_raw" ]]; then
+		if [[ "$git_common_dir_raw" != /* ]]; then
+			git_common_dir_raw="$dir/$git_common_dir_raw"
+		fi
+		if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+			if [[ "$(basename "$git_common_dir")" == ".git" ]]; then
+				printf '%s\n' "$(dirname "$git_common_dir")"
+			else
+				printf '%s\n' "$git_common_dir"
+			fi
+			return
+		fi
+	fi
+
+	resolve_existing_dir "$dir"
 }
 
 echo "=== Docker Persist Regression Tests ==="
@@ -98,7 +129,8 @@ PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(hash_
 ENV_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$ENV_TEST_WORKDIR")-persist-$(hash_string "$ENV_TEST_WORKDIR")"
 ALPHA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "alpha")-$(hash_string "alpha")-$(hash_string "$TEST_WORKDIR")"
 BETA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "beta")-$(hash_string "beta")-$(hash_string "$TEST_WORKDIR")"
-REPO_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$REPO_WORKDIR")-persist-$(hash_string "$REPO_WORKDIR")"
+REPO_SCOPE_ROOT="$(resolve_persist_scope_root "$REPO_WORKDIR")"
+REPO_PERSIST_CONTAINER_NAME="cco-$(sanitize_name_fragment "$(basename "$REPO_SCOPE_ROOT")")-persist-$(hash_string "$REPO_SCOPE_ROOT")"
 
 cleanup_test_artifacts() {
 	docker rm -f "$PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
