@@ -354,12 +354,33 @@ needs_claude_authentication() {
 
 # Read the host's current Claude credential payload so startup checks can
 # reason about expiry without teaching cco to perform OAuth itself.
+capture_macos_keychain_credentials() {
+	local payload_file error_file
+	keychain_credentials_payload=""
+	keychain_credentials_error=""
+
+	payload_file=$(mktemp)
+	error_file=$(mktemp)
+
+	if security find-generic-password -s "Claude Code-credentials" -a "$USER" -w >"$payload_file" 2>"$error_file"; then
+		keychain_credentials_payload=$(cat "$payload_file")
+		rm -f "$payload_file" "$error_file"
+		return 0
+	fi
+
+	keychain_credentials_error=$(tr '\n' ' ' <"$error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+	rm -f "$payload_file" "$error_file"
+	return 1
+}
+
 get_claude_credentials_payload() {
 	local claude_config_dir
 	claude_config_dir=$(find_claude_config_dir)
 
 	if command -v security &>/dev/null; then
-		security find-generic-password -s "Claude Code-credentials" -a "$USER" -w 2>/dev/null || true
+		if capture_macos_keychain_credentials; then
+			printf '%s' "$keychain_credentials_payload"
+		fi
 	elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
 		cat "$claude_config_dir/.credentials.json"
 	fi
@@ -376,7 +397,7 @@ extract_oauth_expiry_ms() {
 	fi
 
 	# Claude currently stores millisecond epochs, but tolerate second epochs.
-	if (( expires_at < 1000000000000 )); then
+	if ((expires_at < 1000000000000)); then
 		expires_at=$((expires_at * 1000))
 	fi
 
@@ -386,10 +407,10 @@ extract_oauth_expiry_ms() {
 oauth_token_needs_startup_refresh() {
 	local expires_at_ms="$1"
 	local now_ms refresh_window_ms
-	now_ms=$(( $(date +%s) * 1000 ))
+	now_ms=$(($(date +%s) * 1000))
 	refresh_window_ms=$((10 * 60 * 1000))
 
-	(( expires_at_ms <= now_ms + refresh_window_ms ))
+	((expires_at_ms <= now_ms + refresh_window_ms))
 }
 
 backend_can_persist_oauth_refresh() {
@@ -442,6 +463,107 @@ run_unsandboxed_claude_refresh() {
 	return "$status"
 }
 
+confirm_default_yes() {
+	local prompt="$1"
+	local auto_message="${2:-}"
+
+	if [[ "$yes_flag" == true ]]; then
+		if [[ -n "$auto_message" ]]; then
+			log "$auto_message"
+		fi
+		return 0
+	fi
+
+	if [[ -t 0 && -t 1 ]]; then
+		echo
+		read -p "$prompt [Y/n] " -r
+		if [[ $REPLY =~ ^([Nn])$ ]]; then
+			return 1
+		fi
+		return 0
+	fi
+
+	return 1
+}
+
+is_ssh_session() {
+	[[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]]
+}
+
+looks_like_locked_keychain_error() {
+	local message
+	message=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+	case "$message" in
+	*"user interaction is not allowed"* | *"interaction is not allowed"* | *"errsecinteractionnotallowed"* | *"cssmerr_csp_no_user_interaction"*)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+get_login_keychain_path() {
+	local login_keychain
+	login_keychain=$(security login-keychain 2>/dev/null | tr -d '"' | head -n 1)
+	if [[ -n "$login_keychain" ]]; then
+		printf '%s\n' "$login_keychain"
+	else
+		printf '%s/Library/Keychains/login.keychain-db\n' "$HOME"
+	fi
+}
+
+get_login_keychain_unlock_command() {
+	local login_keychain
+	login_keychain=$(get_login_keychain_path)
+	printf 'security unlock-keychain %q\n' "$login_keychain"
+}
+
+run_macos_keychain_unlock() {
+	local login_keychain
+	login_keychain=$(get_login_keychain_path)
+	security unlock-keychain "$login_keychain"
+}
+
+ensure_accessible_macos_keychain_credentials() {
+	local unlock_command
+
+	if capture_macos_keychain_credentials; then
+		log "Verified Claude Code credentials in macOS Keychain"
+		return 0
+	fi
+
+	if ! is_ssh_session || ! looks_like_locked_keychain_error "$keychain_credentials_error"; then
+		return 1
+	fi
+
+	unlock_command=$(get_login_keychain_unlock_command)
+
+	warn "cco could not read Claude Code credentials from the macOS login keychain"
+	warn "Because this session is running over SSH, the login keychain is probably locked"
+
+	if confirm_default_yes \
+		"Unlock the macOS login keychain now so cco can read Claude credentials and continue?" \
+		"--yes enabled; unlocking the macOS login keychain before starting cco"; then
+		if ! run_macos_keychain_unlock; then
+			error "Keychain unlock did not complete successfully"
+			error "Run \`$unlock_command\` and then retry cco."
+			exit 1
+		fi
+
+		if capture_macos_keychain_credentials; then
+			log "Unlocked the macOS login keychain and verified Claude Code credentials"
+			return 0
+		fi
+
+		error "cco still could not read Claude Code credentials after unlocking the login keychain"
+		error "Run plain \`$(get_claude_command)\` and login again if needed, then retry cco."
+		exit 1
+	fi
+
+	error "cco needs access to the macOS login keychain before this session can start"
+	error "Run \`$unlock_command\` and then retry cco."
+	exit 1
+}
+
 ensure_refreshable_oauth_credentials() {
 	local credentials_payload expires_at_ms
 	credentials_payload=$(get_claude_credentials_payload)
@@ -466,28 +588,26 @@ ensure_refreshable_oauth_credentials() {
 	warn "Claude OAuth token is expired or near expiry"
 	warn "This sandbox path cannot safely persist Claude's refresh back to the host credentials"
 
-	if [[ -t 0 && -t 1 ]]; then
-		echo
-		read -p "Run a one-shot plain Claude refresh outside the sandbox before starting cco? [Y/n] " -r
-		if [[ ! $REPLY =~ ^([Nn])$ ]]; then
-			if ! run_unsandboxed_claude_refresh; then
-				error "Claude refresh did not complete successfully"
-				error "Run plain \`$(get_claude_command)\` once outside the sandbox, then retry cco."
+	if confirm_default_yes \
+		"cco thinks Claude's OAuth token needs a refresh, and this sandbox cannot save the refreshed credentials back to your host. Run a one-shot plain Claude refresh now before starting cco?" \
+		"--yes enabled; refreshing Claude OAuth credentials before starting cco"; then
+		if ! run_unsandboxed_claude_refresh; then
+			error "Claude refresh did not complete successfully"
+			error "Run plain \`$(get_claude_command)\` once outside the sandbox, then retry cco."
+			exit 1
+		fi
+
+		credentials_payload=$(get_claude_credentials_payload)
+		if [[ -n "$credentials_payload" ]] && expires_at_ms=$(extract_oauth_expiry_ms "$credentials_payload"); then
+			if oauth_token_needs_startup_refresh "$expires_at_ms"; then
+				error "Claude credentials still look expired after the refresh attempt"
+				error "Run plain \`$(get_claude_command)\` outside the sandbox, finish any login flow, then retry cco."
 				exit 1
 			fi
-
-			credentials_payload=$(get_claude_credentials_payload)
-			if [[ -n "$credentials_payload" ]] && expires_at_ms=$(extract_oauth_expiry_ms "$credentials_payload"); then
-				if oauth_token_needs_startup_refresh "$expires_at_ms"; then
-					error "Claude credentials still look expired after the refresh attempt"
-					error "Run plain \`$(get_claude_command)\` outside the sandbox, finish any login flow, then retry cco."
-					exit 1
-				fi
-			fi
-
-			log "Claude OAuth credentials refreshed"
-			return 0
 		fi
+
+		log "Claude OAuth credentials refreshed"
+		return 0
 	fi
 
 	error "Claude credentials need an out-of-sandbox refresh before this cco session can start"
@@ -511,12 +631,11 @@ verify_claude_authentication() {
 
 	# Verify credentials exist (simple check, no staging)
 	if command -v security &>/dev/null; then
-		if ! security find-generic-password -s "Claude Code-credentials" -a "$USER" -w >/dev/null 2>&1; then
+		if ! ensure_accessible_macos_keychain_credentials; then
 			error "No Claude Code credentials found in macOS Keychain"
 			error "Please run \`claude\` and login to authenticate, then try again."
 			exit 1
 		fi
-		log "Verified Claude Code credentials in macOS Keychain"
 	elif [[ -f "$claude_config_dir/.credentials.json" ]]; then
 		log "Verified Claude Code credentials file exists"
 	else
@@ -1771,6 +1890,7 @@ allow_keychain=false
 enable_background_tasks=false
 rebuild_image=false
 pull_image=false
+yes_flag=false
 shell_mode=false
 safe_mode=false
 force_bridge_network=false
@@ -1819,6 +1939,10 @@ set -- "${normalized_args[@]}"
 remaining_args=()
 while [[ $# -gt 0 ]]; do
 	case $1 in
+	--yes | -y)
+		yes_flag=true
+		shift
+		;;
 	--backend)
 		if [[ $# -lt 2 ]]; then
 			error "--backend requires an argument (auto, native, docker)"
@@ -2101,6 +2225,7 @@ if [[ $# -gt 0 ]]; then
 		echo "Options:"
 		echo "  --rebuild             Force rebuild Docker image"
 		echo "  --pull                Pull latest image before starting"
+		echo "  --yes, -y             Auto-accept startup recovery prompts"
 		echo "  --version, -v         Show version"
 		echo "  --env, -e KEY=VAL     Set container environment variable"
 		echo "  --packages, -p PKG    Install additional apt packages"
