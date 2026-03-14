@@ -114,6 +114,8 @@ TEST_WORKDIR="$TEST_ROOT/cco-persist-test-$$"
 ENV_TEST_WORKDIR="$TEST_ROOT/cco-persist-env-test-$$"
 REPO_WORKDIR="$TEST_ROOT/cco-persist-repo-$$"
 REPO_WORKTREE="$TEST_ROOT/cco-persist-repo-wt-$$"
+CUSTOM_IMAGE_NAME="cco:test-persist-custom-$$"
+CUSTOM_IMAGE_SESSION_NAME="image-override"
 mkdir -p "$TEST_HOME" "$TEST_WORKDIR" "$TEST_HOME/.ssh"
 mkdir -p "$ENV_TEST_WORKDIR" "$REPO_WORKDIR"
 
@@ -129,6 +131,7 @@ PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(hash_
 ENV_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$ENV_TEST_WORKDIR")-persist-$(hash_string "$ENV_TEST_WORKDIR")"
 ALPHA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "alpha")-$(hash_string "alpha")-$(hash_string "$TEST_WORKDIR")"
 BETA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "beta")-$(hash_string "beta")-$(hash_string "$TEST_WORKDIR")"
+CUSTOM_IMAGE_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "$CUSTOM_IMAGE_SESSION_NAME")-$(hash_string "$CUSTOM_IMAGE_SESSION_NAME")-$(hash_string "$TEST_WORKDIR")"
 REPO_SCOPE_ROOT="$(resolve_persist_scope_root "$REPO_WORKDIR")"
 REPO_PERSIST_CONTAINER_NAME="cco-$(sanitize_name_fragment "$(basename "$REPO_SCOPE_ROOT")")-persist-$(hash_string "$REPO_SCOPE_ROOT")"
 
@@ -137,7 +140,9 @@ cleanup_test_artifacts() {
 	docker rm -f "$ENV_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$ALPHA_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$BETA_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$CUSTOM_IMAGE_CONTAINER_NAME" >/dev/null 2>&1 || true
 	docker rm -f "$REPO_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker image rm "$CUSTOM_IMAGE_NAME" >/dev/null 2>&1 || true
 	rm -rf "$TEST_ROOT"
 }
 
@@ -256,6 +261,52 @@ else
 	assert_contains "$TEST_ROOT/persist-drift.log" \
 		"Persistent container exists with a different configuration" \
 		"persist mode detects config drift"
+fi
+
+docker image tag cco:latest "$CUSTOM_IMAGE_NAME"
+
+echo ""
+echo "Test: custom Docker image overrides are honored and affect persist drift"
+if run_in_test_workdir --backend docker --image "$CUSTOM_IMAGE_NAME" --persist "$CUSTOM_IMAGE_SESSION_NAME" --command bash -lc \
+	'echo custom-image >/tmp/cco-persist-image-proof && cat /tmp/cco-persist-image-proof' \
+	>"$TEST_ROOT/persist-image-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-image-first.log" "custom-image" \
+		"custom image session writes inside the chosen image"
+	assert_contains "$TEST_ROOT/persist-image-first.log" \
+		"Using custom Docker image: $CUSTOM_IMAGE_NAME" \
+		"custom image override is logged"
+	assert_contains "$TEST_ROOT/persist-image-first.log" \
+		"Creating persistent container: $CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session creates its own persistent container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-first.log"
+	fail "custom image session first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --docker-image "$CUSTOM_IMAGE_NAME" --persist "$CUSTOM_IMAGE_SESSION_NAME" --command bash -lc \
+	'cat /tmp/cco-persist-image-proof' \
+	>"$TEST_ROOT/persist-image-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-image-second.log" "custom-image" \
+		"--docker-image alias reuses state from the chosen image session"
+	assert_contains "$TEST_ROOT/persist-image-second.log" \
+		"Reusing persistent container: $CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session reuses the same persistent container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-second.log"
+	fail "custom image session second run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist "$CUSTOM_IMAGE_SESSION_NAME" --command true \
+	>"$TEST_ROOT/persist-image-drift.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-drift.log"
+	fail "custom image session should reject reuse without the image override"
+else
+	assert_contains "$TEST_ROOT/persist-image-drift.log" \
+		"Persistent container exists with a different configuration" \
+		"custom image choice participates in persist config drift"
 fi
 
 echo ""
