@@ -130,6 +130,62 @@ assert_file_content() {
 	fi
 }
 
+build_tool_bin() {
+	local dest="$1"
+	shift
+	mkdir -p "$dest"
+	local tool src
+	for tool in "$@"; do
+		src=$(command -v "$tool" 2>/dev/null || true)
+		if [[ -n "$src" ]]; then
+			ln -sf "$src" "$dest/$tool"
+		fi
+	done
+}
+
+run_loader_case() {
+	local label="$1"
+	local work_dir="$2"
+	local home_dir="$3"
+	local path_override="$4"
+	local out_file="$5"
+	local body="$6"
+	local loader_script="$TEST_ROOT/loader_case.sh"
+
+	cat >"$loader_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+warn() { echo "WARN: $*"; }
+log() { :; }
+
+# shellcheck disable=SC1090,SC2046
+eval "$(sed -n '
+  /^path_in_array()/,/^}/p
+  /^remove_path_from_array()/,/^}/p
+  /^resolve_path()/,/^}/p
+  /^add_rw_path()/,/^}/p
+  /^load_additional_directories_from_settings()/,/^}/p
+' "$CCO_BIN")"
+
+additional_dirs=()
+additional_ro_paths=()
+deny_paths=()
+EOF
+	printf 'cd %q\n' "$work_dir" >>"$loader_script"
+	printf 'HOME=%q\n' "$home_dir" >>"$loader_script"
+	printf '%s\n' "$body" >>"$loader_script"
+
+	echo "Test: $label"
+	if PATH="$path_override" CCO_BIN="$CCO_BIN" /bin/bash "$loader_script" >"$out_file" 2>&1; then
+		pass "$label runs successfully"
+	else
+		echo "  output:"
+		sed 's/^/    /' "$out_file"
+		fail "$label runs successfully"
+	fi
+}
+
 echo "=== Additional Directories from Settings Tests ==="
 echo "Platform: $(uname -s) ($(uname -m))"
 echo ""
@@ -207,7 +263,47 @@ EOF
 	assert_contains "$TEST_ROOT/invalid_${backend}.log" \
 		"Skipping additionalDirectories from" \
 		"invalid settings file warns ($backend)"
+
+	# Test 6: Wrong-shaped additionalDirectories warns clearly
+	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
+{"additionalDirectories": {"dir": "$EXTRA_DIR_A"}}
+EOF
+	run_command_case "$backend" "wrong-shaped additional directories" "$PROJ_DIR" "$TEST_HOME" "$TEST_ROOT/wrongshape_${backend}.log"
+	assert_contains "$TEST_ROOT/wrongshape_${backend}.log" \
+		"additionalDirectories must be an array" \
+		"wrong-shaped additionalDirectories warns ($backend)"
 done
+
+echo ""
+echo "--- Parser Selection ---"
+
+if command -v jq >/dev/null 2>&1; then
+	JQ_ONLY_BIN="$TEST_ROOT/jq-only-bin"
+	build_tool_bin "$JQ_ONLY_BIN" jq dirname basename sed tr
+
+	cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
+{"additionalDirectories": ["$EXTRA_DIR_A"]}
+EOF
+	run_loader_case "jq fallback without python3" "$PROJ_DIR" "$TEST_HOME" "$JQ_ONLY_BIN" "$TEST_ROOT/jq_fallback.log" \
+		'load_additional_directories_from_settings; printf "ADDED:%s\n" "${additional_dirs[0]:-}"'
+	assert_contains "$TEST_ROOT/jq_fallback.log" \
+		"ADDED:$EXTRA_DIR_A" \
+		"jq fallback adds configured directory"
+else
+	skip "jq unavailable: skipping jq fallback parser test"
+fi
+
+NO_PARSER_BIN="$TEST_ROOT/no-parser-bin"
+build_tool_bin "$NO_PARSER_BIN" sed
+
+cat >"$PROJ_DIR/.claude/settings.local.json" <<EOF
+{"additionalDirectories": ["$EXTRA_DIR_A"]}
+EOF
+run_loader_case "missing python3 and jq warns" "$PROJ_DIR" "$TEST_HOME" "$NO_PARSER_BIN" "$TEST_ROOT/no_parser.log" \
+	'load_additional_directories_from_settings'
+assert_contains "$TEST_ROOT/no_parser.log" \
+	"python3/jq not found" \
+	"missing parsers warning is surfaced"
 
 echo ""
 echo "=== Results ==="
