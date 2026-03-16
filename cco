@@ -1977,19 +1977,20 @@ run_container() {
 	local original_creds_content=""
 	local host_creds_file=""
 	local startup_system_creds_content=""
+	local stop_persistent_container_on_exit=false
 
 	# Setup cleanup and credentials sync-back on exit
 	if [[ "$allow_oauth_refresh" = true ]]; then
 		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
-			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content"; cleanup_docker_overlays' EXIT
+			trap 'stop_persistent_container_if_needed; sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content"; cleanup_docker_overlays' EXIT
 		else
-			trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+			trap 'stop_persistent_container_if_needed; sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
 		fi
 	else
 		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
-			trap 'cleanup_docker_overlays' EXIT
+			trap 'stop_persistent_container_if_needed; cleanup_docker_overlays' EXIT
 		else
-			trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+			trap 'stop_persistent_container_if_needed; rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
 		fi
 	fi
 
@@ -2106,6 +2107,10 @@ run_container() {
 			local filtered_args=()
 			local project_claude_mount="$current_dir/.claude:$current_dir/.claude"
 			local current_dir_mount="$current_dir:$current_dir"
+			local git_worktree_common_dir_mount=""
+			if [[ -n "$git_worktree_common_dir" ]]; then
+				git_worktree_common_dir_mount="$git_worktree_common_dir:$git_worktree_common_dir"
+			fi
 			local i=0
 
 			while [[ $i -lt ${#docker_args[@]} ]]; do
@@ -2113,7 +2118,7 @@ run_container() {
 				case "$arg" in
 				-v)
 					local mount_spec="${docker_args[$((i + 1))]}"
-					if [[ "$mount_spec" == "$current_dir_mount" || "$mount_spec" == "$project_claude_mount" ]]; then
+					if [[ "$mount_spec" == "$current_dir_mount" || "$mount_spec" == "$project_claude_mount" || "$mount_spec" == "$git_worktree_common_dir_mount" ]]; then
 						((i += 2))
 						continue
 					fi
@@ -2181,6 +2186,21 @@ run_container() {
 		echo $!
 	}
 
+	stop_persistent_container_if_needed() {
+		if [[ "$stop_persistent_container_on_exit" != true ]]; then
+			return 0
+		fi
+
+		if [[ -z "${CONTAINER_NAME:-}" ]]; then
+			return 0
+		fi
+
+		if container_is_running; then
+			log "Stopping persistent container: $CONTAINER_NAME"
+			docker stop "$CONTAINER_NAME" >/dev/null || true
+		fi
+	}
+
 	ensure_requested_workdir_is_available() {
 		if docker exec \
 			-u "${host_uid}:${host_gid}" \
@@ -2215,17 +2235,21 @@ run_container() {
 				log "Starting persistent container: $CONTAINER_NAME"
 				docker start "$CONTAINER_NAME" >/dev/null
 			fi
+			stop_persistent_container_on_exit=true
 			return 0
 		fi
 
 		log "Creating persistent container: $CONTAINER_NAME"
-		docker run -d \
+		docker create \
 			--label "cco.persist=1" \
 			--label "cco.persist.config-hash=$persist_config_hash" \
 			--label "cco.persist.state-dir=$persist_state_dir_path" \
 			"${docker_args[@]}" \
 			"$IMAGE_NAME" \
 			sh -lc 'trap "exit 0" TERM INT; while :; do sleep 3600; done' >/dev/null
+		log "Starting persistent container: $CONTAINER_NAME"
+		docker start "$CONTAINER_NAME" >/dev/null
+		stop_persistent_container_on_exit=true
 	}
 
 	run_persistent_command() {
@@ -2287,14 +2311,20 @@ run_container() {
 			else
 				log "Starting persistent container: $CONTAINER_NAME"
 				docker start "$CONTAINER_NAME" >/dev/null
+				stop_persistent_container_on_exit=true
 			fi
 		else
 			local persist_config_hash
 			persist_config_hash=$(compute_persist_config_hash)
 			ensure_persistent_container "$persist_config_hash" || return 1
 		fi
-		run_persistent_command
-		run_status=$?
+		if run_persistent_command; then
+			run_status=0
+		else
+			run_status=$?
+		fi
+		stop_persistent_container_if_needed
+		stop_persistent_container_on_exit=false
 	else
 		if [[ "$shell_mode" = true ]]; then
 			if [[ ${#claude_args[@]} -eq 0 ]]; then
