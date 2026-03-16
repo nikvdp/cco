@@ -545,7 +545,8 @@ extract_oauth_expiry_ms() {
 
 	# Prefer the Claude OAuth expiry field, but tolerate the older flat payload shape.
 	if command -v python3 &>/dev/null; then
-		if expires_at=$(python3 - "$credentials_payload" 2>/dev/null <<'PY'
+		if expires_at=$(
+			python3 - "$credentials_payload" 2>/dev/null <<'PY'
 import json
 import sys
 
