@@ -541,11 +541,69 @@ get_claude_credentials_payload() {
 
 extract_oauth_expiry_ms() {
 	local credentials_payload="$1"
-	local expires_at=""
+	local expires_at="" parse_status=0
 
-	expires_at=$(printf '%s' "$credentials_payload" | tr -d '\n' | sed -n 's/.*"expiresAt"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+	# Prefer the Claude OAuth expiry field, but tolerate the older flat payload shape.
+	if command -v python3 &>/dev/null; then
+		if expires_at=$(python3 - "$credentials_payload" 2>/dev/null <<'PY'
+import json
+import sys
 
-	if [[ -z "$expires_at" || ! "$expires_at" =~ ^[0-9]+$ ]]; then
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(1)
+
+candidates = []
+claude_oauth = data.get("claudeAiOauth")
+if isinstance(claude_oauth, dict):
+    candidates.append(claude_oauth.get("expiresAt"))
+candidates.append(data.get("expiresAt"))
+
+for value in candidates:
+    if isinstance(value, bool):
+        continue
+    if isinstance(value, int):
+        print(value)
+        sys.exit(0)
+    if isinstance(value, float) and value.is_integer():
+        print(int(value))
+        sys.exit(0)
+    if isinstance(value, str) and value.isdigit():
+        print(value)
+        sys.exit(0)
+
+sys.exit(1)
+PY
+		); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	elif command -v jq &>/dev/null; then
+		if expires_at=$(printf '%s' "$credentials_payload" | jq -r '
+			[
+				.claudeAiOauth.expiresAt?,
+				.expiresAt?
+			]
+			| map(
+				if type == "number" then tostring
+				elif type == "string" and test("^[0-9]+$") then .
+				else null
+				end
+			)
+			| map(select(. != null))
+			| .[0] // empty
+		' 2>/dev/null); then
+			parse_status=0
+		else
+			parse_status=$?
+		fi
+	else
+		return 1
+	fi
+
+	if [[ $parse_status -ne 0 || -z "$expires_at" || ! "$expires_at" =~ ^[0-9]+$ ]]; then
 		return 1
 	fi
 
