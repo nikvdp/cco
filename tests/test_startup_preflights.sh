@@ -133,6 +133,19 @@ else
 fi
 
 echo ""
+echo "Test: OAuth expiry extraction prefers claudeAiOauth over mcpOAuth entries"
+if (
+	PATH="$FAKE_BIN:$PATH"
+	source "$FUNCTIONS_ONLY"
+	payload='{"mcpOAuth":{"sentry|one":{"expiresAt":0},"other|two":{"expiresAt":0}},"claudeAiOauth":{"expiresAt":1773682299199}}'
+	[[ "$(extract_oauth_expiry_ms "$payload")" == "1773682299199" ]]
+); then
+	pass "OAuth expiry extraction prefers claudeAiOauth over mcpOAuth entries"
+else
+	fail "OAuth expiry extraction prefers claudeAiOauth over mcpOAuth entries"
+fi
+
+echo ""
 echo "Test: macOS SSH keychain recovery auto-unlocks when --yes is active"
 if (
 	PATH="$FAKE_BIN:$PATH"
