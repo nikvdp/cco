@@ -1,0 +1,587 @@
+#!/usr/bin/env bash
+# Regression tests for Docker --persist behavior.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+CCO_BIN="$PWD/cco"
+
+PASSED=0
+FAILED=0
+SKIPPED=0
+
+pass() {
+	echo "PASS: $1"
+	PASSED=$((PASSED + 1))
+}
+
+fail() {
+	echo "FAIL: $1"
+	FAILED=$((FAILED + 1))
+}
+
+skip() {
+	echo "SKIP: $1"
+	SKIPPED=$((SKIPPED + 1))
+}
+
+assert_contains() {
+	local file="$1"
+	local expected="$2"
+	local name="$3"
+	if grep -Fq -- "$expected" "$file"; then
+		pass "$name"
+	else
+		echo "  expected to find: $expected"
+		echo "  output:"
+		sed 's/^/    /' "$file"
+		fail "$name"
+	fi
+}
+
+assert_container_running() {
+	local container_name="$1"
+	local name="$2"
+	local running
+	running=$(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || echo "missing")
+	if [[ "$running" == "true" ]]; then
+		pass "$name"
+	else
+		echo "  expected container to be running: $container_name"
+		fail "$name"
+	fi
+}
+
+assert_container_stopped() {
+	local container_name="$1"
+	local name="$2"
+	local running
+	running=$(docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || echo "missing")
+	if [[ "$running" == "false" ]]; then
+		pass "$name"
+	else
+		echo "  expected container to be stopped: $container_name"
+		fail "$name"
+	fi
+}
+
+supports_docker() {
+	command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+hash_string() {
+	local input="$1"
+	if command -v sha256sum >/dev/null 2>&1; then
+		printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 12)}'
+	elif command -v shasum >/dev/null 2>&1; then
+		printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+	else
+		printf '%s' "$input" | cksum | awk '{print $1}'
+	fi
+}
+
+sanitize_dir_name() {
+	printf '%s' "$(basename "$1")" | tr -c '[:alnum:]._-' '_'
+}
+
+sanitize_name_fragment() {
+	printf '%s' "$1" | tr -c '[:alnum:]._-' '_' | cut -c1-40
+}
+
+resolve_existing_dir() {
+	local input="$1"
+	if [[ ! -d "$input" ]]; then
+		return 1
+	fi
+	(cd "$input" && pwd -P)
+}
+
+resolve_persist_scope_root() {
+	local dir="$1"
+	local git_common_dir_raw=""
+	local git_common_dir=""
+
+	git_common_dir_raw="$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null)" || true
+	if [[ -n "$git_common_dir_raw" ]]; then
+		if [[ "$git_common_dir_raw" != /* ]]; then
+			git_common_dir_raw="$dir/$git_common_dir_raw"
+		fi
+		if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+			if [[ "$(basename "$git_common_dir")" == ".git" ]]; then
+				printf '%s\n' "$(dirname "$git_common_dir")"
+			else
+				printf '%s\n' "$git_common_dir"
+			fi
+			return
+		fi
+	fi
+
+	resolve_existing_dir "$dir"
+}
+
+echo "=== Docker Persist Regression Tests ==="
+echo "Platform: $(uname -s) ($(uname -m))"
+echo ""
+
+if ! supports_docker; then
+	skip "docker backend unavailable"
+	echo ""
+	echo "=== Results ==="
+	echo "Passed: $PASSED"
+	echo "Failed: $FAILED"
+	echo "Skipped: $SKIPPED"
+	exit 0
+fi
+
+TEST_ROOT=$(mktemp -d)
+TEST_HOME="$TEST_ROOT/home"
+TEST_WORKDIR="$TEST_ROOT/cco-persist-test-$$"
+ENV_TEST_WORKDIR="$TEST_ROOT/cco-persist-env-test-$$"
+REPO_WORKDIR="$TEST_ROOT/cco-persist-repo-$$"
+REPO_WORKTREE="$TEST_ROOT/cco-persist-repo-wt-$$"
+CUSTOM_IMAGE_NAME="cco:test-persist-custom-$$"
+CUSTOM_IMAGE_SESSION_NAME="image-override"
+mkdir -p "$TEST_HOME" "$TEST_WORKDIR" "$TEST_HOME/.ssh"
+mkdir -p "$ENV_TEST_WORKDIR" "$REPO_WORKDIR"
+
+git init "$REPO_WORKDIR" >/dev/null
+git -C "$REPO_WORKDIR" config user.email "persist@example.com"
+git -C "$REPO_WORKDIR" config user.name "persist"
+printf 'persist\n' >"$REPO_WORKDIR/README.md"
+git -C "$REPO_WORKDIR" add README.md
+git -C "$REPO_WORKDIR" commit -m "init" >/dev/null
+git -C "$REPO_WORKDIR" worktree add -b persist-worktree "$REPO_WORKTREE" >/dev/null
+
+PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(hash_string "$TEST_WORKDIR")"
+ENV_PERSIST_CONTAINER_NAME="cco-$(sanitize_dir_name "$ENV_TEST_WORKDIR")-persist-$(hash_string "$ENV_TEST_WORKDIR")"
+ALPHA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "alpha")-$(hash_string "alpha")-$(hash_string "$TEST_WORKDIR")"
+BETA_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "beta")-$(hash_string "beta")-$(hash_string "$TEST_WORKDIR")"
+CUSTOM_IMAGE_CONTAINER_NAME="cco-$(sanitize_dir_name "$TEST_WORKDIR")-persist-$(sanitize_name_fragment "$CUSTOM_IMAGE_SESSION_NAME")-$(hash_string "$CUSTOM_IMAGE_SESSION_NAME")-$(hash_string "$TEST_WORKDIR")"
+REPO_SCOPE_ROOT="$(resolve_persist_scope_root "$REPO_WORKDIR")"
+REPO_PERSIST_CONTAINER_NAME="cco-$(sanitize_name_fragment "$(basename "$REPO_SCOPE_ROOT")")-persist-$(hash_string "$REPO_SCOPE_ROOT")"
+
+cleanup_test_artifacts() {
+	docker rm -f "$PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$ENV_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$ALPHA_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$BETA_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$CUSTOM_IMAGE_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker rm -f "$REPO_PERSIST_CONTAINER_NAME" >/dev/null 2>&1 || true
+	docker image rm "$CUSTOM_IMAGE_NAME" >/dev/null 2>&1 || true
+	rm -rf "$TEST_ROOT"
+}
+
+run_in_test_workdir() {
+	(
+		cd "$TEST_WORKDIR"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+run_in_env_test_workdir() {
+	(
+		cd "$ENV_TEST_WORKDIR"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+run_in_repo_workdir() {
+	(
+		cd "$REPO_WORKDIR"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+run_in_repo_worktree() {
+	(
+		cd "$REPO_WORKTREE"
+		HOME="$TEST_HOME" "$CCO_BIN" "$@"
+	)
+}
+
+trap cleanup_test_artifacts EXIT
+
+echo "Test: default Docker mode stays ephemeral across invocations"
+if run_in_test_workdir --backend docker --command bash -lc \
+	'echo ephemeral >/tmp/cco-ephemeral-proof && cat /tmp/cco-ephemeral-proof' \
+	>"$TEST_ROOT/ephemeral-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/ephemeral-first.log" "ephemeral" \
+		"default Docker run can write inside container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/ephemeral-first.log"
+	fail "default Docker run can write inside container"
+fi
+
+if run_in_test_workdir --backend docker --command bash -lc \
+	'test ! -e /tmp/cco-ephemeral-proof' \
+	>"$TEST_ROOT/ephemeral-second.log" 2>&1; then
+	pass "default Docker mode does not reuse container state"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/ephemeral-second.log"
+	fail "default Docker mode does not reuse container state"
+fi
+
+echo ""
+echo "Test: --persist reuses container state"
+if run_in_test_workdir --backend docker --persist --command bash -lc \
+	'echo first >/tmp/cco-persist-proof && cat /tmp/cco-persist-proof' \
+	>"$TEST_ROOT/persist-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-first.log" "first" \
+		"persist mode writes inside persistent container"
+	assert_contains "$TEST_ROOT/persist-first.log" \
+		"Creating persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist mode creates a named container on first run"
+	assert_contains "$TEST_ROOT/persist-first.log" \
+		"Starting persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist mode starts the new managed container on first run"
+	assert_container_stopped "$PERSIST_CONTAINER_NAME" \
+		"persist mode stops the managed container after first run"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-first.log"
+	fail "persist mode first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist --command bash -lc \
+	'cat /tmp/cco-persist-proof' \
+	>"$TEST_ROOT/persist-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-second.log" "first" \
+		"persist mode reuses prior container filesystem state"
+	assert_contains "$TEST_ROOT/persist-second.log" \
+		"Starting persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist mode restarts the stopped managed container on second run"
+	assert_container_stopped "$PERSIST_CONTAINER_NAME" \
+		"persist mode stops the managed container after second run"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-second.log"
+	fail "persist mode second run succeeds"
+fi
+
+echo ""
+echo "Test: managed persist normalizes a running container back to stopped state"
+if docker start "$PERSIST_CONTAINER_NAME" >/dev/null 2>&1; then
+	pass "test container can be started for running-state coverage"
+else
+	fail "test container can be started for running-state coverage"
+fi
+assert_container_running "$PERSIST_CONTAINER_NAME" \
+	"test container is running before reuse coverage"
+
+if run_in_test_workdir --backend docker --persist --command bash -lc \
+	'cat /tmp/cco-persist-proof' \
+	>"$TEST_ROOT/persist-third.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-third.log" "first" \
+		"persist mode keeps state when a managed container was already running"
+	assert_contains "$TEST_ROOT/persist-third.log" \
+		"Reusing persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist mode recognizes an already-running managed container"
+	assert_container_stopped "$PERSIST_CONTAINER_NAME" \
+		"persist mode stops an already-running managed container after use"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-third.log"
+	fail "persist mode running-container normalization succeeds"
+fi
+
+echo ""
+echo "Test: --persist rejects config drift"
+if run_in_test_workdir --backend docker --persist --deny-path "$TEST_HOME/.ssh" --command true \
+	>"$TEST_ROOT/persist-drift.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-drift.log"
+	fail "persist mode rejects config drift"
+else
+	assert_contains "$TEST_ROOT/persist-drift.log" \
+		"Persistent container exists with a different configuration" \
+		"persist mode detects config drift"
+fi
+
+docker image tag cco:latest "$CUSTOM_IMAGE_NAME"
+
+echo ""
+echo "Test: custom Docker image overrides are honored and affect persist drift"
+if run_in_test_workdir --backend docker --image "$CUSTOM_IMAGE_NAME" --persist "$CUSTOM_IMAGE_SESSION_NAME" --command bash -lc \
+	'echo custom-image >/tmp/cco-persist-image-proof && cat /tmp/cco-persist-image-proof' \
+	>"$TEST_ROOT/persist-image-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-image-first.log" "custom-image" \
+		"custom image session writes inside the chosen image"
+	assert_contains "$TEST_ROOT/persist-image-first.log" \
+		"Using custom Docker image: $CUSTOM_IMAGE_NAME" \
+		"custom image override is logged"
+	assert_contains "$TEST_ROOT/persist-image-first.log" \
+		"Creating persistent container: $CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session creates its own persistent container"
+	assert_contains "$TEST_ROOT/persist-image-first.log" \
+		"Starting persistent container: $CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session starts the managed container on first run"
+	assert_container_stopped "$CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session leaves the managed container stopped after first run"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-first.log"
+	fail "custom image session first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --docker-image "$CUSTOM_IMAGE_NAME" --persist "$CUSTOM_IMAGE_SESSION_NAME" --command bash -lc \
+	'cat /tmp/cco-persist-image-proof' \
+	>"$TEST_ROOT/persist-image-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-image-second.log" "custom-image" \
+		"--docker-image alias reuses state from the chosen image session"
+	assert_contains "$TEST_ROOT/persist-image-second.log" \
+		"Starting persistent container: $CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session restarts the stopped persistent container"
+	assert_container_stopped "$CUSTOM_IMAGE_CONTAINER_NAME" \
+		"custom image session leaves the managed container stopped after reuse"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-second.log"
+	fail "custom image session second run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist "$CUSTOM_IMAGE_SESSION_NAME" --command true \
+	>"$TEST_ROOT/persist-image-drift.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-image-drift.log"
+	fail "custom image session should reject reuse without the image override"
+else
+	assert_contains "$TEST_ROOT/persist-image-drift.log" \
+		"Persistent container exists with a different configuration" \
+		"custom image choice participates in persist config drift"
+fi
+
+echo ""
+echo "Test: named persist sessions keep separate state"
+if run_in_test_workdir --backend docker --persist=alpha --command bash -lc \
+	'echo alpha >/tmp/cco-persist-named-proof && cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-alpha-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-alpha-first.log" "alpha" \
+		"named persist session alpha writes its own state"
+	assert_contains "$TEST_ROOT/persist-alpha-first.log" \
+		"Creating persistent container: $ALPHA_CONTAINER_NAME" \
+		"named persist session alpha creates its own container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-alpha-first.log"
+	fail "named persist session alpha first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist beta --command bash -lc \
+	'test ! -e /tmp/cco-persist-named-proof && echo beta >/tmp/cco-persist-named-proof && cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-beta-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-beta-first.log" "beta" \
+		"named persist session beta starts from separate state"
+	assert_contains "$TEST_ROOT/persist-beta-first.log" \
+		"Creating persistent container: $BETA_CONTAINER_NAME" \
+		"named persist session beta creates a distinct container"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-beta-first.log"
+	fail "named persist session beta first run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist=alpha --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-alpha-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-alpha-second.log" "alpha" \
+		"named persist session alpha keeps its own state"
+	assert_contains "$TEST_ROOT/persist-alpha-second.log" \
+		"Starting persistent container: $ALPHA_CONTAINER_NAME" \
+		"named persist session alpha restarts its stopped container"
+	assert_container_stopped "$ALPHA_CONTAINER_NAME" \
+		"named persist session alpha stops its managed container after reuse"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-alpha-second.log"
+	fail "named persist session alpha second run succeeds"
+fi
+
+if run_in_test_workdir --backend docker --persist beta --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-beta-second.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-beta-second.log" "beta" \
+		"named persist session beta keeps separate state"
+	assert_contains "$TEST_ROOT/persist-beta-second.log" \
+		"Starting persistent container: $BETA_CONTAINER_NAME" \
+		"named persist session beta restarts its stopped container"
+	assert_container_stopped "$BETA_CONTAINER_NAME" \
+		"named persist session beta stops its managed container after reuse"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-beta-second.log"
+	fail "named persist session beta second run succeeds"
+fi
+
+echo ""
+echo "Test: bare --persist still leaves known subcommands alone"
+if run_in_test_workdir --backend docker --persist shell 'printf subcommand-ok' \
+	>"$TEST_ROOT/persist-shell-subcommand.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-shell-subcommand.log" "subcommand-ok" \
+		"persist still allows shell subcommand syntax"
+	assert_contains "$TEST_ROOT/persist-shell-subcommand.log" \
+		"Starting persistent container: $PERSIST_CONTAINER_NAME" \
+		"persist shell command restarts the default project session"
+	assert_container_stopped "$PERSIST_CONTAINER_NAME" \
+		"persist shell command leaves the default project session stopped"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-shell-subcommand.log"
+	fail "persist still allows shell subcommand syntax"
+fi
+
+echo ""
+echo "Test: repo-scoped --persist targets the same session across sibling worktrees"
+if run_in_repo_workdir --backend docker --persist --command bash -lc \
+	'echo repo >/tmp/cco-repo-persist-proof && cat /tmp/cco-repo-persist-proof' \
+	>"$TEST_ROOT/repo-persist-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/repo-persist-first.log" "repo" \
+		"repo-scoped persist creates state from the primary worktree"
+	assert_contains "$TEST_ROOT/repo-persist-first.log" \
+		"Creating persistent container: $REPO_PERSIST_CONTAINER_NAME" \
+		"repo-scoped persist uses the repo identity for the default session"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/repo-persist-first.log"
+	fail "repo-scoped persist creates state from the primary worktree"
+fi
+
+if run_in_repo_worktree --backend docker --persist --command true \
+	>"$TEST_ROOT/repo-persist-second.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/repo-persist-second.log"
+	fail "repo-scoped persist should fail clearly when the sibling worktree path is not mounted"
+else
+	assert_contains "$TEST_ROOT/repo-persist-second.log" \
+		"Starting persistent container: $REPO_PERSIST_CONTAINER_NAME" \
+		"repo-scoped persist still targets the same container from a sibling worktree"
+	assert_contains "$TEST_ROOT/repo-persist-second.log" \
+		"Persistent container does not expose the current working directory" \
+		"repo-scoped persist fails clearly when the sibling worktree path is unavailable"
+	assert_container_stopped "$REPO_PERSIST_CONTAINER_NAME" \
+		"repo-scoped persist leaves the managed container stopped after a failed sibling worktree attach"
+fi
+
+echo ""
+echo "Test: --persist-container attaches to an existing container by name or ID"
+if run_in_test_workdir --backend docker --persist-container "$ALPHA_CONTAINER_NAME" --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-container-name.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-container-name.log" "alpha" \
+		"persist-container can attach by container name"
+	assert_contains "$TEST_ROOT/persist-container-name.log" \
+		"Starting persistent container: $ALPHA_CONTAINER_NAME" \
+		"persist-container starts a stopped target container by name"
+	assert_container_stopped "$ALPHA_CONTAINER_NAME" \
+		"persist-container stops a target container that it started by name"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-name.log"
+	fail "persist-container can attach by container name"
+fi
+
+ALPHA_CONTAINER_ID=$(docker inspect -f '{{.Id}}' "$ALPHA_CONTAINER_NAME")
+if run_in_test_workdir --backend docker --persist-container "$ALPHA_CONTAINER_ID" --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-container-id.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-container-id.log" "alpha" \
+		"persist-container can attach by container ID"
+	assert_contains "$TEST_ROOT/persist-container-id.log" \
+		"Starting persistent container: $ALPHA_CONTAINER_NAME" \
+		"persist-container starts a stopped target container by ID"
+	assert_container_stopped "$ALPHA_CONTAINER_NAME" \
+		"persist-container stops a target container that it started by ID"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-id.log"
+	fail "persist-container can attach by container ID"
+fi
+
+echo ""
+echo "Test: --persist-container leaves already-running targets running"
+if docker start "$ALPHA_CONTAINER_NAME" >/dev/null 2>&1; then
+	pass "persist-container target can be started for running-state coverage"
+else
+	fail "persist-container target can be started for running-state coverage"
+fi
+assert_container_running "$ALPHA_CONTAINER_NAME" \
+	"persist-container target is running before reuse coverage"
+
+if run_in_test_workdir --backend docker --persist-container "$ALPHA_CONTAINER_NAME" --command bash -lc \
+	'cat /tmp/cco-persist-named-proof' \
+	>"$TEST_ROOT/persist-container-running.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-container-running.log" "alpha" \
+		"persist-container can reuse an already-running target"
+	assert_contains "$TEST_ROOT/persist-container-running.log" \
+		"Using persistent container: $ALPHA_CONTAINER_NAME" \
+		"persist-container leaves running targets alone"
+	assert_container_running "$ALPHA_CONTAINER_NAME" \
+		"persist-container keeps already-running targets running after use"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-running.log"
+	fail "persist-container can reuse an already-running target"
+fi
+
+echo ""
+echo "Test: --persist-container fails clearly for missing or incompatible targets"
+if run_in_test_workdir --backend docker --persist-container cco-no-such-container --command true \
+	>"$TEST_ROOT/persist-container-missing.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-missing.log"
+	fail "persist-container should fail when the target container is missing"
+else
+	assert_contains "$TEST_ROOT/persist-container-missing.log" \
+		"Persistent container not found: cco-no-such-container" \
+		"persist-container reports missing targets clearly"
+fi
+
+if run_in_repo_worktree --backend docker --persist-container "$ALPHA_CONTAINER_NAME" --command true \
+	>"$TEST_ROOT/persist-container-workdir.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-container-workdir.log"
+	fail "persist-container should fail when the target container does not expose the current worktree"
+else
+	assert_contains "$TEST_ROOT/persist-container-workdir.log" \
+		"Persistent container does not expose the current working directory" \
+		"persist-container reports unavailable workdirs clearly"
+fi
+
+echo ""
+echo "Test: --persist rejects .env drift"
+printf 'PERSIST_TEST_ENV=one\n' >"$ENV_TEST_WORKDIR/.env"
+# shellcheck disable=SC2016  # Intentional: expand inside the container shell, not in this test process.
+if run_in_env_test_workdir --backend docker --persist --command bash -lc \
+	'printf %s "$PERSIST_TEST_ENV"' \
+	>"$TEST_ROOT/persist-env-first.log" 2>&1; then
+	assert_contains "$TEST_ROOT/persist-env-first.log" "one" \
+		"persist mode loads .env on first run"
+else
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-env-first.log"
+	fail "persist mode loads .env on first run"
+fi
+
+printf 'PERSIST_TEST_ENV=two\n' >"$ENV_TEST_WORKDIR/.env"
+if run_in_env_test_workdir --backend docker --persist --command true \
+	>"$TEST_ROOT/persist-env-drift.log" 2>&1; then
+	echo "  output:"
+	sed 's/^/    /' "$TEST_ROOT/persist-env-drift.log"
+	fail "persist mode rejects .env drift"
+else
+	assert_contains "$TEST_ROOT/persist-env-drift.log" \
+		"Persistent container exists with a different configuration" \
+		"persist mode detects .env drift"
+fi
+
+echo ""
+echo "=== Results ==="
+echo "Passed: $PASSED"
+echo "Failed: $FAILED"
+echo "Skipped: $SKIPPED"
+
+if [[ $FAILED -gt 0 ]]; then
+	exit 1
+fi

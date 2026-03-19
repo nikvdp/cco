@@ -38,11 +38,112 @@ else
 	CCO_INSTALLATION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-IMAGE_NAME="cco:latest"
-# Generate unique container name to allow concurrent sessions
+DEFAULT_IMAGE_NAME="cco:latest"
+IMAGE_NAME="$DEFAULT_IMAGE_NAME"
 # Sanitize directory name for Docker container naming (only alphanumeric, underscore, dash, dot)
 sanitized_dir=$(basename "$PWD" | tr -c '[:alnum:]._-' '_')
-CONTAINER_NAME="cco-${sanitized_dir}-$(date +%s)-$$"
+CONTAINER_NAME=""
+persist_scope_root=""
+persist_scope_slug=""
+
+hash_string() {
+	local input="$1"
+	if command -v sha256sum &>/dev/null; then
+		printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 12)}'
+	elif command -v shasum &>/dev/null; then
+		printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+	else
+		printf '%s' "$input" | cksum | awk '{print $1}'
+	fi
+}
+
+sanitize_name_fragment() {
+	local input="$1"
+	printf '%s' "$input" | tr -c '[:alnum:]._-' '_' | cut -c1-40
+}
+
+is_valid_persist_name() {
+	local input="$1"
+	[[ "$input" =~ ^[[:alnum:]._-]+$ ]]
+}
+
+is_known_subcommand() {
+	case "$1" in
+	shell | codex | droid | opencode | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+		return 0
+		;;
+	*)
+		return 1
+		;;
+	esac
+}
+
+using_custom_docker_image() {
+	[[ -n "$docker_image_override" ]]
+}
+
+generate_container_name() {
+	if [[ -n "$persist_container_target" ]]; then
+		printf '%s\n' "$persist_container_target"
+		return
+	fi
+
+	local scope_root="${persist_scope_root:-$PWD}"
+	local scope_slug="${persist_scope_slug:-$sanitized_dir}"
+	local scope_root_hash
+	scope_root_hash=$(hash_string "$scope_root")
+	if [[ "$persist_mode" == true ]]; then
+		if [[ -n "$persist_name_flag" ]]; then
+			local persist_name_slug
+			persist_name_slug=$(sanitize_name_fragment "$persist_name_flag")
+			printf 'cco-%s-persist-%s-%s-%s\n' \
+				"$scope_slug" \
+				"$persist_name_slug" \
+				"$(hash_string "$persist_name_flag")" \
+				"$scope_root_hash"
+		else
+			printf 'cco-%s-persist-%s\n' "$scope_slug" "$scope_root_hash"
+		fi
+	else
+		printf 'cco-%s-%s-%s\n' "$sanitized_dir" "$(date +%s)" "$$"
+	fi
+}
+
+persist_state_root() {
+	printf '%s/.local/share/cco/persist\n' "$HOME"
+}
+
+persist_state_dir() {
+	printf '%s/%s\n' "$(persist_state_root)" "$CONTAINER_NAME"
+}
+
+resolve_persist_scope_root() {
+	local git_common_dir_raw git_common_dir
+	if command -v git &>/dev/null; then
+		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
+		if [[ -n "$git_common_dir_raw" ]] && git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+			if [[ "$(basename "$git_common_dir")" == ".git" ]]; then
+				printf '%s\n' "$(dirname "$git_common_dir")"
+			else
+				printf '%s\n' "$git_common_dir"
+			fi
+			return
+		fi
+	fi
+
+	printf '%s\n' "$PWD"
+}
+
+persist_scope_slug_for_root() {
+	local scope_root="$1"
+	local base_name
+	base_name=$(basename "$scope_root")
+	if [[ -n "$base_name" && "$base_name" != "/" && "$base_name" != "." ]]; then
+		sanitize_name_fragment "$base_name"
+	else
+		printf 'workspace\n'
+	fi
+}
 
 # Detect available sandbox backends
 detect_sandbox_backend() {
@@ -292,7 +393,8 @@ load_additional_directories_from_settings() {
 
 	local dirs parse_output parse_error parse_status
 	if [[ "$parser" == "python3" ]]; then
-		if parse_output=$(python3 - "$settings_file" 2>&1 <<'PY'
+		if parse_output=$(
+			python3 - "$settings_file" 2>&1 <<'PY'
 import json
 import sys
 
@@ -359,7 +461,7 @@ PY
 		else
 			warn "Skipping additionalDirectories entry (not a directory): $dir"
 		fi
-	done <<< "$dirs"
+	done <<<"$dirs"
 }
 
 # Check if Docker is available (only when using Docker backend)
@@ -1003,6 +1105,10 @@ sync_credentials_back() {
 
 # Check if we should use pre-built image
 should_use_prebuilt_image() {
+	if using_custom_docker_image; then
+		return 1
+	fi
+
 	# Don't use pre-built if explicitly rebuilding
 	if [[ "$rebuild_image" = true ]]; then
 		return 1
@@ -1214,9 +1320,17 @@ show_info() {
 			if docker image inspect "$IMAGE_NAME" &>/dev/null; then
 				local image_created
 				image_created=$(docker image inspect "$IMAGE_NAME" --format '{{.Created}}' | cut -d'T' -f1)
-				echo "  cco Image: ✓ Built ($image_created)"
+				if using_custom_docker_image; then
+					echo "  Docker Image: ✓ Available ($IMAGE_NAME, $image_created)"
+				else
+					echo "  cco Image: ✓ Built ($image_created)"
+				fi
 			else
-				echo "  cco Image: ✗ Not built (run with --rebuild)"
+				if using_custom_docker_image; then
+					echo "  Docker Image: ✗ Not present locally ($IMAGE_NAME)"
+				else
+					echo "  cco Image: ✗ Not built (run with --rebuild)"
+				fi
 			fi
 		else
 			echo "  Docker Daemon: ✗ Not running"
@@ -1507,11 +1621,13 @@ run_container() {
 	local host_gid
 	host_gid=$(id -g)
 	local current_dir="$PWD"
+	local persist_state_dir_path=""
+	if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+		persist_state_dir_path=$(persist_state_dir)
+		mkdir -p "$persist_state_dir_path"
+	fi
 
 	log "Starting cco container..."
-
-	# Remove existing container if it exists
-	docker rm -f "$CONTAINER_NAME" &>/dev/null || true
 
 	# Detect if we have a TTY
 	local tty_flag=""
@@ -1520,7 +1636,6 @@ run_container() {
 	fi
 
 	local docker_args=(
-		--rm
 		--init
 		--name "$CONTAINER_NAME"
 		--user "root"
@@ -1529,6 +1644,9 @@ run_container() {
 		-v "$current_dir":"$current_dir"
 		-w "$current_dir"
 	)
+	if [[ "$persist_mode" != true ]]; then
+		docker_args=(--rm "${docker_args[@]}")
+	fi
 
 	# Add docker mount with destination de-duplication.
 	# If the target is already mounted read-only and a later mount requests
@@ -1593,8 +1711,33 @@ run_container() {
 		docker_args+=(-v "$mount_spec")
 	}
 
+	find_named_container_id() {
+		docker ps -aq -f "name=^${CONTAINER_NAME}$"
+	}
+
+	container_is_running() {
+		[[ -n "$(docker ps -q -f "name=^${CONTAINER_NAME}$")" ]]
+	}
+
+	resolve_persist_target_container_name() {
+		local target="$1"
+		local container_name
+		container_name=$(docker inspect -f '{{.Name}}' "$target" 2>/dev/null || true)
+		if [[ -z "$container_name" ]]; then
+			error "Persistent container not found: $target"
+			return 1
+		fi
+		printf '%s\n' "${container_name#/}"
+	}
+
 	# Determine the target user's home directory in container
 	local container_home="/home/hostuser"
+	local container_path="$container_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	local persistent_exec_path="$container_path"
+	docker_args+=(
+		-e "HOME=$container_home"
+		-e "PATH=$container_path"
+	)
 
 	# Determine Codex config directory mapping for Docker codex-mode sessions.
 	# This ensures Codex auth/state resolves to the mounted directory even when
@@ -1638,14 +1781,50 @@ run_container() {
 		done
 	}
 
+	create_deny_overlay_source() {
+		local blocked_path="$1"
+		local overlay_path=""
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+			local deny_hash
+			deny_hash=$(hash_string "$blocked_path")
+			overlay_path="$persist_state_dir_path/deny/$deny_hash"
+			mkdir -p "$(dirname "$overlay_path")"
+			if [[ -d "$blocked_path" ]]; then
+				mkdir -p "$overlay_path"
+			else
+				: >"$overlay_path"
+			fi
+		elif [[ -d "$blocked_path" ]]; then
+			overlay_path=$(mktemp -d)
+			docker_cleanup_paths+=("$overlay_path")
+		else
+			overlay_path=$(mktemp)
+			: >"$overlay_path"
+			docker_cleanup_paths+=("$overlay_path")
+		fi
+		printf '%s\n' "$overlay_path"
+	}
+
 	# In codex mode, mount a PATH shim so nested `codex` calls run with
 	# bypass mode inside cco's outer sandbox.
 	if [[ "$codex_mode" == true ]]; then
 		local codex_shim_dir
-		codex_shim_dir=$(create_codex_mode_shim_dir)
-		docker_cleanup_paths+=("$codex_shim_dir")
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+			codex_shim_dir="$persist_state_dir_path/codex-shim"
+			if [[ ! -x "$codex_shim_dir/codex" ]]; then
+				local temp_codex_shim_dir
+				temp_codex_shim_dir=$(create_codex_mode_shim_dir)
+				mkdir -p "$codex_shim_dir"
+				cp -R "$temp_codex_shim_dir"/. "$codex_shim_dir"/
+				rm -rf "$temp_codex_shim_dir"
+			fi
+		else
+			codex_shim_dir=$(create_codex_mode_shim_dir)
+			docker_cleanup_paths+=("$codex_shim_dir")
+		fi
 		add_mount_arg "$codex_shim_dir" "$codex_shim_dir" "ro"
 		docker_args+=(-e "CCO_PREPEND_PATH=$codex_shim_dir")
+		persistent_exec_path="$codex_shim_dir:$persistent_exec_path"
 		log "Enabled codex-mode PATH shim for nested codex invocations"
 	fi
 
@@ -1663,14 +1842,12 @@ run_container() {
 
 	# Apply deny overlays by mounting empty temp locations
 	for blocked_path in "${deny_paths[@]}"; do
+		local tmp_overlay
 		if [[ -d "$blocked_path" ]]; then
-			tmp_overlay=$(mktemp -d)
-			docker_cleanup_paths+=("$tmp_overlay")
+			tmp_overlay=$(create_deny_overlay_source "$blocked_path")
 			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		elif [[ -f "$blocked_path" ]]; then
-			tmp_overlay=$(mktemp)
-			touch "$tmp_overlay"
-			docker_cleanup_paths+=("$tmp_overlay")
+			tmp_overlay=$(create_deny_overlay_source "$blocked_path")
 			add_mount_arg "$tmp_overlay" "$blocked_path" "ro"
 		else
 			warn "Skipping deny overlay (path disappeared): $blocked_path"
@@ -1678,11 +1855,6 @@ run_container() {
 		fi
 		log "Denying path inside container: $blocked_path"
 	done
-
-	# Add TTY flags if available
-	if [[ -n "$tty_flag" ]]; then
-		docker_args+=("$tty_flag")
-	fi
 
 	# Detect host timezone and set container timezone
 	local host_timezone=""
@@ -1855,16 +2027,30 @@ run_container() {
 
 	# Create temporary directory for credentials extraction
 	local temp_creds_dir
-	temp_creds_dir=$(mktemp -d)
+	if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+		temp_creds_dir="$persist_state_dir_path/creds"
+		mkdir -p "$temp_creds_dir"
+	else
+		temp_creds_dir=$(mktemp -d)
+	fi
 	local original_creds_content=""
 	local host_creds_file=""
 	local startup_system_creds_content=""
+	local stop_persistent_container_on_exit=false
 
 	# Setup cleanup and credentials sync-back on exit
 	if [[ "$allow_oauth_refresh" = true ]]; then
-		trap 'sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+			trap 'stop_persistent_container_if_needed; sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content"; cleanup_docker_overlays' EXIT
+		else
+			trap 'stop_persistent_container_if_needed; sync_credentials_back "$temp_creds_dir" "$original_creds_content" "$host_creds_file" "$startup_system_creds_content" && rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		fi
 	else
-		trap 'rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		if [[ "$persist_mode" == true && -z "$persist_container_target" ]]; then
+			trap 'stop_persistent_container_if_needed; cleanup_docker_overlays' EXIT
+		else
+			trap 'stop_persistent_container_if_needed; rm -rf "$temp_creds_dir"; cleanup_docker_overlays' EXIT
+		fi
 	fi
 
 	# Ensure ~/.claude directory exists and mount it (read-write for state updates)
@@ -1975,6 +2161,69 @@ run_container() {
 		docker_args+=("${sandbox_extra_args[@]}")
 	fi
 
+	compute_persist_config_hash() {
+		persist_config_docker_args_signature() {
+			local filtered_args=()
+			local project_claude_mount="$current_dir/.claude:$current_dir/.claude"
+			local current_dir_mount="$current_dir:$current_dir"
+			local git_worktree_common_dir_mount=""
+			if [[ -n "$git_worktree_common_dir" ]]; then
+				git_worktree_common_dir_mount="$git_worktree_common_dir:$git_worktree_common_dir"
+			fi
+			local i=0
+
+			while [[ $i -lt ${#docker_args[@]} ]]; do
+				local arg="${docker_args[$i]}"
+				case "$arg" in
+				-v)
+					local mount_spec="${docker_args[$((i + 1))]}"
+					if [[ "$mount_spec" == "$current_dir_mount" || "$mount_spec" == "$project_claude_mount" || "$mount_spec" == "$git_worktree_common_dir_mount" ]]; then
+						((i += 2))
+						continue
+					fi
+					filtered_args+=("$arg" "$mount_spec")
+					((i += 2))
+					;;
+				-w)
+					local workdir_arg="${docker_args[$((i + 1))]}"
+					if [[ "$workdir_arg" == "$current_dir" ]]; then
+						((i += 2))
+						continue
+					fi
+					filtered_args+=("$arg" "$workdir_arg")
+					((i += 2))
+					;;
+				*)
+					filtered_args+=("$arg")
+					((i += 1))
+					;;
+				esac
+			done
+
+			printf 'docker_arg=%q\n' "${filtered_args[@]}"
+		}
+
+		local env_file_signature=""
+		if [[ -f ".env" ]]; then
+			env_file_signature=$(hash_string "$(cat .env)")
+		fi
+		local signature
+		signature=$(
+			printf 'image=%s\n' "$IMAGE_NAME"
+			printf 'persist_scope_root=%s\n' "${persist_scope_root:-$current_dir}"
+			printf 'host_uid=%s\n' "$host_uid"
+			printf 'host_gid=%s\n' "$host_gid"
+			printf 'docker_access=%s\n' "$docker_access"
+			printf 'force_bridge_network=%s\n' "$force_bridge_network"
+			printf 'allow_oauth_refresh=%s\n' "$allow_oauth_refresh"
+			printf 'codex_mode=%s\n' "$codex_mode"
+			printf 'custom_packages=%s\n' "${custom_packages[*]}"
+			printf '.env=%s\n' "$env_file_signature"
+			persist_config_docker_args_signature
+		)
+		hash_string "$signature"
+	}
+
 	# Function to start background SIGWINCH monitor
 	start_sigwinch_monitor() {
 		local container_name="$1"
@@ -1992,36 +2241,203 @@ run_container() {
 			while docker ps --format '{{.Names}}' | grep -q "^$container_name\$" 2>/dev/null; do
 				sleep 2
 			done
-		) &
+		) >/dev/null 2>&1 &
+		echo $!
+	}
+
+	stop_persistent_container_if_needed() {
+		if [[ "$stop_persistent_container_on_exit" != true ]]; then
+			return 0
+		fi
+
+		if [[ -z "${CONTAINER_NAME:-}" ]]; then
+			return 0
+		fi
+
+		if container_is_running; then
+			log "Stopping persistent container: $CONTAINER_NAME"
+			docker stop "$CONTAINER_NAME" >/dev/null || true
+		fi
+	}
+
+	ensure_requested_workdir_is_available() {
+		if docker exec \
+			-u "${host_uid}:${host_gid}" \
+			-e "HOME=$container_home" \
+			-e "PATH=$persistent_exec_path" \
+			"$CONTAINER_NAME" \
+			sh -lc 'test -d "$1"' sh "$current_dir" >/dev/null 2>&1; then
+			return 0
+		fi
+
+		error "Persistent container does not expose the current working directory: $current_dir"
+		error "Use a different session, attach to another container, or recreate this container from a broader starting point."
+		return 1
+	}
+
+	ensure_persistent_container() {
+		local persist_config_hash="$1"
+		local existing_container_id
+		existing_container_id=$(find_named_container_id)
+
+		if [[ -n "$existing_container_id" ]]; then
+			local existing_config_hash
+			existing_config_hash=$(docker inspect -f '{{ index .Config.Labels "cco.persist.config-hash" }}' "$CONTAINER_NAME" 2>/dev/null || echo "")
+			if [[ "$existing_config_hash" != "$persist_config_hash" ]]; then
+				error "Persistent container exists with a different configuration: $CONTAINER_NAME"
+				error "Remove it with: docker rm -f $CONTAINER_NAME"
+				return 1
+			fi
+			if container_is_running; then
+				log "Reusing persistent container: $CONTAINER_NAME"
+			else
+				log "Starting persistent container: $CONTAINER_NAME"
+				docker start "$CONTAINER_NAME" >/dev/null
+			fi
+			stop_persistent_container_on_exit=true
+			return 0
+		fi
+
+		log "Creating persistent container: $CONTAINER_NAME"
+		docker create \
+			--label "cco.persist=1" \
+			--label "cco.persist.config-hash=$persist_config_hash" \
+			--label "cco.persist.state-dir=$persist_state_dir_path" \
+			"${docker_args[@]}" \
+			"$IMAGE_NAME" \
+			sh -lc 'trap "exit 0" TERM INT; while :; do sleep 3600; done' >/dev/null
+		log "Starting persistent container: $CONTAINER_NAME"
+		docker start "$CONTAINER_NAME" >/dev/null
+		stop_persistent_container_on_exit=true
+	}
+
+	run_persistent_command() {
+		local sigwinch_monitor_pid=""
+		local -a exec_args=(exec)
+		if [[ -n "$tty_flag" ]]; then
+			exec_args+=("$tty_flag")
+		fi
+		exec_args+=(
+			-u "${host_uid}:${host_gid}"
+			-e "HOME=$container_home"
+			-e "PATH=$persistent_exec_path"
+			-w "$current_dir"
+			"$CONTAINER_NAME"
+		)
+
+		if ! ensure_requested_workdir_is_available; then
+			return 1
+		fi
+
+		if [[ "$shell_mode" = true ]]; then
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				if [[ -n "$tty_flag" ]]; then
+					sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+				fi
+				docker "${exec_args[@]}" bash
+			else
+				docker "${exec_args[@]}" bash -c "${claude_args[*]}"
+			fi
+		else
+			local cmd_str
+			cmd_str=$(get_command)
+			local cmd_array=()
+			read -ra cmd_array <<<"$cmd_str"
+
+			if [[ -n "$tty_flag" ]]; then
+				sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+			fi
+			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+				docker "${exec_args[@]}" "${cmd_array[@]}" "${claude_args[@]}"
+			else
+				docker "${exec_args[@]}" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			fi
+		fi
+		local exec_status=$?
+		if [[ -n "$sigwinch_monitor_pid" ]]; then
+			kill "$sigwinch_monitor_pid" 2>/dev/null || true
+		fi
+		return $exec_status
 	}
 
 	# Run the container (entrypoint will handle user setup)
-	if [[ "$shell_mode" = true ]]; then
-		if [[ ${#claude_args[@]} -eq 0 ]]; then
-			# Interactive shell mode - Docker image may not have user's $SHELL
-			start_sigwinch_monitor "$CONTAINER_NAME"
-			docker run "${docker_args[@]}" "$IMAGE_NAME" bash
+	local run_status=0
+	if [[ "$persist_mode" == true || -n "$persist_container_target" ]]; then
+		if [[ -n "$persist_container_target" ]]; then
+			CONTAINER_NAME=$(resolve_persist_target_container_name "$persist_container_target") || return 1
+			if container_is_running; then
+				log "Using persistent container: $CONTAINER_NAME"
+			else
+				log "Starting persistent container: $CONTAINER_NAME"
+				docker start "$CONTAINER_NAME" >/dev/null
+				stop_persistent_container_on_exit=true
+			fi
 		else
-			# Shell command mode
-			docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
+			local persist_config_hash
+			persist_config_hash=$(compute_persist_config_hash)
+			ensure_persistent_container "$persist_config_hash" || return 1
 		fi
-	else
-		start_sigwinch_monitor "$CONTAINER_NAME"
-		# Get command to use and split into array for Docker run too
-		local cmd_str
-		cmd_str=$(get_command)
-		read -ra cmd_array <<<"$cmd_str"
-
-		# Check if we're running a custom command (CCO_COMMAND or --command)
-		if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
-			# Running custom command - pass arguments as-is, no Claude-specific flags
-			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+		if run_persistent_command; then
+			run_status=0
 		else
-			# Running Claude - use --dangerously-skip-permissions
-			docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+			run_status=$?
+		fi
+		stop_persistent_container_if_needed
+		stop_persistent_container_on_exit=false
+	else
+		if [[ "$shell_mode" = true ]]; then
+			if [[ ${#claude_args[@]} -eq 0 ]]; then
+				# Interactive shell mode - Docker image may not have user's $SHELL
+				local sigwinch_monitor_pid=""
+				if [[ -n "$tty_flag" ]]; then
+					sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+				fi
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" bash
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" bash
+				fi
+				run_status=$?
+				if [[ -n "$sigwinch_monitor_pid" ]]; then
+					kill "$sigwinch_monitor_pid" 2>/dev/null || true
+				fi
+			else
+				# Shell command mode
+				docker run "${docker_args[@]}" "$IMAGE_NAME" bash -c "${claude_args[*]}"
+				run_status=$?
+			fi
+		else
+			local sigwinch_monitor_pid=""
+			if [[ -n "$tty_flag" ]]; then
+				sigwinch_monitor_pid=$(start_sigwinch_monitor "$CONTAINER_NAME")
+			fi
+			# Get command to use and split into array for Docker run too
+			local cmd_str
+			cmd_str=$(get_command)
+			read -ra cmd_array <<<"$cmd_str"
+
+			# Check if we're running a custom command (CCO_COMMAND or --command)
+			if [[ -n "$command_flag" || -n "$CCO_COMMAND" ]]; then
+				# Running custom command - pass arguments as-is, no Claude-specific flags
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" "${claude_args[@]}"
+				fi
+			else
+				# Running Claude - use --dangerously-skip-permissions
+				if [[ -n "$tty_flag" ]]; then
+					docker run "$tty_flag" "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+				else
+					docker run "${docker_args[@]}" "$IMAGE_NAME" "${cmd_array[@]}" --dangerously-skip-permissions "${claude_args[@]}"
+				fi
+			fi
+			run_status=$?
+			if [[ -n "$sigwinch_monitor_pid" ]]; then
+				kill "$sigwinch_monitor_pid" 2>/dev/null || true
+			fi
 		fi
 	fi
-	local run_status=$?
 	cleanup_docker_overlays
 	trap - EXIT
 	return $run_status
@@ -2188,6 +2604,10 @@ pull_image=false
 yes_flag=false
 shell_mode=false
 safe_mode=false
+persist_mode=false
+persist_name_flag=""
+persist_container_target=""
+docker_image_override=""
 force_bridge_network=false
 allow_external_git_dir=false
 enable_git_worktree_common_dir=true
@@ -2220,6 +2640,8 @@ found_separator=false
 for arg in "$@"; do
 	if [[ "$arg" == "--" ]]; then
 		found_separator=true
+		normalized_args+=("$arg")
+	elif [[ "$found_separator" == false && "$arg" == --persist=* ]]; then
 		normalized_args+=("$arg")
 	elif [[ "$found_separator" == false && "$arg" == --*=* ]]; then
 		normalized_args+=("${arg%%=*}" "${arg#*=}")
@@ -2261,6 +2683,49 @@ while [[ $# -gt 0 ]]; do
 	--force-docker-bridge-network)
 		force_bridge_network=true
 		shift
+		;;
+	--persist)
+		persist_mode=true
+		if [[ $# -gt 1 ]] && [[ "$2" != -* ]] && ! is_known_subcommand "$2" && is_valid_persist_name "$2"; then
+			persist_name_flag="$2"
+			shift 2
+		else
+			shift
+		fi
+		;;
+	--persist=*)
+		persist_mode=true
+		persist_name_flag="${1#*=}"
+		if [[ -z "$persist_name_flag" ]]; then
+			error "--persist requires a non-empty session name when using --persist=NAME"
+			exit 1
+		fi
+		if ! is_valid_persist_name "$persist_name_flag"; then
+			error "Invalid persist session name: $persist_name_flag"
+			error "Use only letters, numbers, dot, underscore, or dash"
+			exit 1
+		fi
+		shift
+		;;
+	--persist-container)
+		if [[ $# -lt 2 ]]; then
+			error "--persist-container requires a container name or ID"
+			exit 1
+		fi
+		persist_container_target="$2"
+		shift 2
+		;;
+	--image | --docker-image)
+		if [[ $# -lt 2 ]]; then
+			error "$1 requires a Docker image name"
+			exit 1
+		fi
+		docker_image_override="$2"
+		if [[ -z "$docker_image_override" ]]; then
+			error "$1 requires a non-empty Docker image name"
+			exit 1
+		fi
+		shift 2
 		;;
 	--allow-oauth-refresh)
 		allow_oauth_refresh=true
@@ -2402,8 +2867,15 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+persist_scope_root=$(resolve_persist_scope_root)
+persist_scope_slug=$(persist_scope_slug_for_root "$persist_scope_root")
+if using_custom_docker_image; then
+	IMAGE_NAME="$docker_image_override"
+fi
+
 # Now handle subcommands with remaining args
 set -- "${remaining_args[@]}"
+CONTAINER_NAME=$(generate_container_name)
 if [[ $# -gt 0 ]]; then
 	case $1 in
 	self-update)
@@ -2460,6 +2932,10 @@ if [[ $# -gt 0 ]]; then
 		else
 			log "No cco containers found"
 		fi
+		if [[ -d "$(persist_state_root)" ]]; then
+			rm -rf "$(persist_state_root)"
+			log "Removed persistent container state"
+		fi
 		exit 0
 		;;
 	info)
@@ -2475,6 +2951,13 @@ if [[ $# -gt 0 ]]; then
 		exit 0
 		;;
 	pull)
+		if using_custom_docker_image; then
+			log "Pulling Docker image: $IMAGE_NAME"
+			check_dependencies
+			docker pull "$IMAGE_NAME"
+			log "Pull completed successfully"
+			exit 0
+		fi
 		log "Pulling latest pre-built image..."
 		check_dependencies
 		if pull_prebuilt_image; then
@@ -2486,6 +2969,10 @@ if [[ $# -gt 0 ]]; then
 		exit 0
 		;;
 	rebuild)
+		if using_custom_docker_image; then
+			error "rebuild cannot be used with --image or --docker-image"
+			exit 1
+		fi
 		log "Rebuilding cco image..."
 		check_dependencies
 		build_image
@@ -2532,6 +3019,11 @@ if [[ $# -gt 0 ]]; then
 		echo "  --disable-git-worktree-common-dir"
 		echo "                        Disable auto-detection/mounting of git worktree common dir"
 		echo "  --docker-socket       Mount host Docker socket (experimental, defeats isolation)"
+		echo "  --image IMAGE         Run Docker sessions from a specific image"
+		echo "  --docker-image IMAGE  Alias for --image"
+		echo "  --persist[=NAME]      Reuse a Docker container for this repo (Docker only)"
+		echo "                        Also accepts: --persist NAME"
+		echo "  --persist-container   Attach to an existing Docker container by name or ID"
 		echo "  --force-docker-bridge-network"
 		echo "                        Use bridge networking instead of host (Docker only)"
 		echo "  --allow-oauth-refresh Allow OAuth token sync-back (experimental, creates backups)"
@@ -2590,6 +3082,16 @@ main() {
 	detect_sandbox_backend "$SANDBOX_BACKEND"
 	apply_agent_arg_policies
 
+	if [[ ("$persist_mode" == true || -n "$persist_container_target") && "$SANDBOX_BACKEND" != "docker" ]]; then
+		error "--persist and --persist-container are only supported with the Docker backend"
+		exit 1
+	fi
+
+	if [[ -n "$docker_image_override" && "$SANDBOX_BACKEND" != "docker" ]]; then
+		error "--image and --docker-image are only supported with the Docker backend"
+		exit 1
+	fi
+
 	# Check dependencies based on backend
 	check_dependencies
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
@@ -2608,44 +3110,69 @@ main() {
 
 	# Only handle Docker image operations if using Docker backend
 	if [[ "$SANDBOX_BACKEND" == "docker" ]]; then
-		# Handle --pull flag first
-		if [[ "$pull_image" = true ]]; then
-			log "Pulling latest pre-built image..."
-			if pull_prebuilt_image; then
-				log "Pull completed successfully"
-			else
-				warn "Failed to pull pre-built image, using existing or building locally"
+		if using_custom_docker_image; then
+			if [[ "$rebuild_image" = true ]]; then
+				error "--rebuild cannot be used with --image or --docker-image"
+				exit 1
+			fi
+			if [[ ${#custom_packages[@]} -gt 0 ]]; then
+				error "--packages cannot be used with --image or --docker-image"
+				exit 1
 			fi
 		fi
 
-		# Determine whether to pull pre-built image or build locally
-		if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-			# No local image exists
-			if should_use_prebuilt_image; then
-				# Try to pull pre-built image, fallback to build
-				if ! pull_prebuilt_image; then
+		# Handle --pull flag first
+		if [[ "$pull_image" = true ]]; then
+			if using_custom_docker_image; then
+				log "Pulling Docker image: $IMAGE_NAME"
+				docker pull "$IMAGE_NAME"
+				log "Pull completed successfully"
+			else
+				log "Pulling latest pre-built image..."
+				if pull_prebuilt_image; then
+					log "Pull completed successfully"
+				else
+					warn "Failed to pull pre-built image, using existing or building locally"
+				fi
+			fi
+		fi
+
+		if using_custom_docker_image; then
+			if docker image inspect "$IMAGE_NAME" &>/dev/null; then
+				log "Using custom Docker image: $IMAGE_NAME"
+			else
+				log "Using custom Docker image: $IMAGE_NAME (Docker will pull it on first run if needed)"
+			fi
+		else
+			# Determine whether to pull pre-built image or build locally
+			if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+				# No local image exists
+				if should_use_prebuilt_image; then
+					# Try to pull pre-built image, fallback to build
+					if ! pull_prebuilt_image; then
+						build_image
+					fi
+				else
+					# Build locally due to customizations
+					if [[ "$rebuild_image" = true ]]; then
+						log "Rebuilding cco image..."
+					elif [[ ${#custom_packages[@]} -gt 0 ]]; then
+						log "Custom packages specified, building image..."
+					fi
 					build_image
 				fi
-			else
-				# Build locally due to customizations
-				if [[ "$rebuild_image" = true ]]; then
-					log "Rebuilding cco image..."
-				elif [[ ${#custom_packages[@]} -gt 0 ]]; then
+			elif [[ "$rebuild_image" = true ]] || [[ ${#custom_packages[@]} -gt 0 ]]; then
+				# Force rebuild requested or customizations specified
+				if [[ ${#custom_packages[@]} -gt 0 ]]; then
 					log "Custom packages specified, building image..."
+				else
+					log "Rebuilding cco image..."
 				fi
+				docker image rm "$IMAGE_NAME" &>/dev/null || true
 				build_image
-			fi
-		elif [[ "$rebuild_image" = true ]] || [[ ${#custom_packages[@]} -gt 0 ]]; then
-			# Force rebuild requested or customizations specified
-			if [[ ${#custom_packages[@]} -gt 0 ]]; then
-				log "Custom packages specified, rebuilding image..."
 			else
-				log "Rebuilding cco image..."
+				log "Using existing cco image"
 			fi
-			docker image rm "$IMAGE_NAME" &>/dev/null || true
-			build_image
-		else
-			log "Using existing cco image"
 		fi
 	fi
 
