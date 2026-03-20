@@ -396,6 +396,27 @@ if [[ "$OS" == "Darwin" ]]; then
 		skip "--safe ancestor test: CWD not under HOME"
 	fi
 
+	echo "Test: --safe allows lstat on non-ancestor paths under HOME"
+	non_ancestor="$HOME/.sandbox_meta_test_$$"
+	mkdir -p "$non_ancestor/deep/path"
+	if ./sandbox --safe stat "$non_ancestor/deep/path" >/dev/null 2>&1; then
+		pass "--safe allows lstat on non-ancestor paths under HOME"
+	else
+		fail "--safe allows lstat on non-ancestor paths under HOME"
+	fi
+	rm -rf "$non_ancestor"
+
+	echo "Test: --safe allows readlink on symlinks under HOME"
+	link_test="$HOME/.sandbox_link_test_$$"
+	mkdir -p "$link_test"
+	ln -s /tmp "$link_test/tmplink"
+	if ./sandbox --safe readlink "$link_test/tmplink" >/dev/null 2>&1; then
+		pass "--safe allows readlink on symlinks under HOME"
+	else
+		fail "--safe allows readlink on symlinks under HOME"
+	fi
+	rm -rf "$link_test"
+
 	echo "Test: --safe denies reading files from ancestor dirs under HOME"
 	ancestor="$PWD"
 	read_blocked=true
