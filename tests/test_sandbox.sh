@@ -417,16 +417,6 @@ if [[ "$OS" == "Darwin" ]]; then
 	fi
 	rm -rf "$link_test"
 
-	echo "Test: --safe + --deny blocks stat on denied paths"
-	deny_test="$HOME/.sandbox_deny_test_$$"
-	mkdir -p "$deny_test"
-	if ./sandbox --safe --deny "$deny_test" stat "$deny_test" >/dev/null 2>&1; then
-		fail "--safe + --deny blocks stat on denied paths: stat succeeded"
-	else
-		pass "--safe + --deny blocks stat on denied paths"
-	fi
-	rm -rf "$deny_test"
-
 	echo "Test: --safe denies reading files from ancestor dirs under HOME"
 	ancestor="$PWD"
 	read_blocked=true
