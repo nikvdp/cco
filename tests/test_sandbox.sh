@@ -417,6 +417,38 @@ if [[ "$OS" == "Darwin" ]]; then
 	fi
 	rm -rf "$link_test"
 
+	echo "Test: --safe with --deny blocks metadata on denied directories"
+	safe_deny_test="$HOME/.sandbox_safe_deny_test_$$"
+	mkdir -p "$safe_deny_test/denied/inside"
+	echo "secret" >"$safe_deny_test/denied/inside/file.txt"
+	if ./sandbox --safe --deny "$safe_deny_test/denied" stat "$safe_deny_test/denied" >/dev/null 2>&1; then
+		fail "--safe with --deny blocks metadata on denied directories"
+	else
+		pass "--safe with --deny blocks metadata on denied directories"
+	fi
+
+	echo "Test: --safe with --deny blocks metadata on denied files"
+	if ./sandbox --safe --deny "$safe_deny_test/denied" stat "$safe_deny_test/denied/inside/file.txt" >/dev/null 2>&1; then
+		fail "--safe with --deny blocks metadata on denied files"
+	else
+		pass "--safe with --deny blocks metadata on denied files"
+	fi
+
+	echo "Test: --safe with --deny still blocks file reads"
+	if ./sandbox --safe --deny "$safe_deny_test/denied" cat "$safe_deny_test/denied/inside/file.txt" >/dev/null 2>&1; then
+		fail "--safe with --deny still blocks file reads"
+	else
+		pass "--safe with --deny still blocks file reads"
+	fi
+
+	echo "Test: --safe with --deny still blocks directory listing"
+	if ./sandbox --safe --deny "$safe_deny_test/denied" ls "$safe_deny_test/denied" >/dev/null 2>&1; then
+		fail "--safe with --deny still blocks directory listing"
+	else
+		pass "--safe with --deny still blocks directory listing"
+	fi
+	rm -rf "$safe_deny_test"
+
 	echo "Test: --safe denies reading files from ancestor dirs under HOME"
 	ancestor="$PWD"
 	read_blocked=true
