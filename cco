@@ -3185,38 +3185,45 @@ main() {
 	# If inside a git worktree, the object store lives in the main repo's
 	# .git directory, not the worktree. Add it as an additional dir so both
 	# sandbox backends whitelist it for writes automatically.
+	# Also check immediate subdirectories, since cco may be launched from a
+	# parent folder that contains git worktree checkouts.
 	if [[ "$enable_git_worktree_common_dir" == true ]] && command -v git &>/dev/null; then
-		local git_common_dir_raw git_dir_raw git_common_dir git_dir
-		git_common_dir_raw="$(git rev-parse --git-common-dir 2>/dev/null)" || true
-		git_dir_raw="$(git rev-parse --git-dir 2>/dev/null)" || true
+		local _cco_check_dirs=("$PWD")
+		# Scan immediate subdirs for git repos/worktrees via direct .git glob
+		for _cco_gitdir in "$PWD"/*/.git; do
+			[[ -e "$_cco_gitdir" ]] || continue
+			_cco_check_dirs+=("${_cco_gitdir%/.git}")
+		done
 
-		if [[ -n "$git_common_dir_raw" && -n "$git_dir_raw" ]]; then
-			if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
-				if git_dir="$(resolve_existing_dir "$git_dir_raw")"; then
-					local trusted_layout=false
-					if [[ "$git_dir" == "$git_common_dir" ]]; then
-						trusted_layout=true
-					elif [[ "$git_dir" == "$git_common_dir"/worktrees/* ]]; then
-						trusted_layout=true
-					fi
+		for _cco_check_dir in "${_cco_check_dirs[@]}"; do
+			local git_common_dir_raw git_dir_raw git_common_dir git_dir
+			git_common_dir_raw="$(git -C "$_cco_check_dir" rev-parse --git-common-dir 2>/dev/null)" || true
+			git_dir_raw="$(git -C "$_cco_check_dir" rev-parse --git-dir 2>/dev/null)" || true
 
-					if [[ "$trusted_layout" == true || "$allow_external_git_dir" == true ]]; then
-						if [[ "$git_common_dir" != "$PWD"/.git ]] && ! path_in_array "$git_common_dir" "${additional_dirs[@]}"; then
-							additional_dirs+=("$git_common_dir")
-							git_worktree_common_dir="$git_common_dir"
-							log "Adding git common dir for worktree support: $git_common_dir"
+			if [[ -n "$git_common_dir_raw" && -n "$git_dir_raw" ]]; then
+				if git_common_dir="$(resolve_existing_dir "$git_common_dir_raw")"; then
+					if git_dir="$(resolve_existing_dir "$git_dir_raw")"; then
+						local trusted_layout=false
+						if [[ "$git_dir" == "$git_common_dir" ]]; then
+							trusted_layout=true
+						elif [[ "$git_dir" == "$git_common_dir"/worktrees/* ]]; then
+							trusted_layout=true
 						fi
-					else
-						warn "Skipping untrusted git common dir layout: $git_common_dir"
-						warn "Use --allow-external-git-dir (or CCO_ALLOW_EXTERNAL_GIT_DIR=1) to allow it"
+
+						if [[ "$trusted_layout" == true || "$allow_external_git_dir" == true ]]; then
+							if [[ "$git_common_dir" != "$PWD"/.git ]] && ! path_in_array "$git_common_dir" "${additional_dirs[@]}"; then
+								additional_dirs+=("$git_common_dir")
+								git_worktree_common_dir="$git_common_dir"
+								log "Adding git common dir for worktree support: $git_common_dir"
+							fi
+						else
+							warn "Skipping untrusted git common dir layout: $git_common_dir"
+							warn "Use --allow-external-git-dir (or CCO_ALLOW_EXTERNAL_GIT_DIR=1) to allow it"
+						fi
 					fi
-				else
-					warn "Skipping git common dir: unable to resolve git dir path: $git_dir_raw"
 				fi
-			else
-				warn "Skipping git common dir: unable to resolve path: $git_common_dir_raw"
 			fi
-		fi
+		done
 	elif [[ "$enable_git_worktree_common_dir" == false ]]; then
 		log "Git worktree common-dir auto-detection disabled by flag"
 	fi
