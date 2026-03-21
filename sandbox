@@ -547,9 +547,15 @@ run_macos() {
 		# Seatbelt uses LAST-MATCH-WINS, so deny must come before allow exceptions
 		for ap in "${deny_paths[@]+"${deny_paths[@]}"}"; do
 			if [[ -d "$ap" ]]; then
+				if [[ "$safe_mode" == true ]]; then
+					printf '(deny file-read-metadata (subpath "%s"))\n' "$(policy_quote "$ap")"
+				fi
 				printf '(deny file-read* (subpath "%s"))\n' "$(policy_quote "$ap")"
 				printf '(deny file-write* (subpath "%s"))\n' "$(policy_quote "$ap")"
 			else
+				if [[ "$safe_mode" == true ]]; then
+					printf '(deny file-read-metadata (literal "%s"))\n' "$(policy_quote "$ap")"
+				fi
 				printf '(deny file-read* (literal "%s"))\n' "$(policy_quote "$ap")"
 				printf '(deny file-write* (literal "%s"))\n' "$(policy_quote "$ap")"
 			fi
