@@ -913,6 +913,11 @@ ensure_accessible_macos_keychain_credentials() {
 }
 
 ensure_refreshable_oauth_credentials() {
+	# Token from environment is managed externally; nothing to refresh
+	if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+		return 0
+	fi
+
 	local credentials_payload expires_at_ms
 	credentials_payload=$(get_claude_credentials_payload)
 
@@ -966,6 +971,12 @@ ensure_refreshable_oauth_credentials() {
 # Verify Claude Code authentication is available
 verify_claude_authentication() {
 	log "Verifying Claude Code authentication..."
+
+	# If CLAUDE_CODE_OAUTH_TOKEN is set, Claude Code will use it directly
+	if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+		log "Using CLAUDE_CODE_OAUTH_TOKEN from environment"
+		return 0
+	fi
 
 	local claude_config_dir credentials_file
 	claude_config_dir=$(find_claude_config_dir)
@@ -1878,6 +1889,7 @@ run_container() {
 		# Anthropic / Claude Code
 		"ANTHROPIC_API_KEY"
 		"ANTHROPIC_BASE_URL"
+		"CLAUDE_CODE_OAUTH_TOKEN"
 		"CLAUDE_CONFIG_DIR"
 		# OpenAI / Codex
 		"OPENAI_API_KEY"
@@ -3051,6 +3063,7 @@ if [[ $# -gt 0 ]]; then
 		echo "                        Trust external git common dirs for worktree support"
 		echo "  CCO_SANDBOX_ARGS_FILE Persistent sandbox args file (one arg per line)"
 		echo "  ANTHROPIC_API_KEY     Passed through automatically"
+		echo "  CLAUDE_CODE_OAUTH_TOKEN  Passed through (skips credential file check)"
 		echo "  OPENAI_API_KEY        Passed through automatically"
 		echo "  GEMINI_API_KEY        Passed through automatically"
 		echo "  FACTORY_API_KEY       Passed through automatically"
