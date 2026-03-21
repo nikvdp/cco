@@ -151,6 +151,39 @@ rm -f "$POLICY"
 rm -rf "$WRITE_DIR"
 
 #
+# Test 5: Explicit metadata deny overrides broad metadata allow when it comes later
+#
+echo ""
+echo "--- Test 5: Metadata precedence (allow HOME metadata THEN deny child metadata) ---"
+META_DIR="$HOME/.seatbelt_metadata_test_$$"
+mkdir -p "$META_DIR/home/child"
+echo "secret" >"$META_DIR/home/child/file.txt"
+
+POLICY=$(mktemp)
+cat >"$POLICY" <<EOF
+(version 1)
+(allow default)
+(deny file-read* (subpath "$META_DIR/home"))
+(allow file-read-metadata (subpath "$META_DIR/home"))
+(deny file-read-metadata (subpath "$META_DIR/home/child"))
+EOF
+
+if sandbox-exec -f "$POLICY" stat "$META_DIR/home/child" >/dev/null 2>&1; then
+	fail "Explicit metadata deny should block stat on the denied child path"
+else
+	pass "Explicit metadata deny overrides the broad metadata allow"
+fi
+
+if sandbox-exec -f "$POLICY" cat "$META_DIR/home/child/file.txt" 2>/dev/null; then
+	fail "Content reads should remain denied for the child path"
+else
+	pass "Content reads stay denied with the metadata override"
+fi
+
+rm -f "$POLICY"
+rm -rf "$META_DIR"
+
+#
 # Summary
 #
 echo ""
