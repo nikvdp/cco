@@ -26,7 +26,7 @@ info() {
 }
 
 # Configuration
-GITHUB_REPO="nikvdp/cco"
+GITHUB_REPO="antony/cco"
 GITHUB_SSH_URL="git@github.com:${GITHUB_REPO}.git"
 GITHUB_HTTPS_URL="https://github.com/${GITHUB_REPO}.git"
 CCO_INSTALLATION_DIR="$HOME/.local/share/cco"
@@ -297,7 +297,7 @@ case "${1:-}" in
 --help | -h)
 	echo "cco installer - a thin protective layer for Claude Code"
 	echo ""
-	echo "Usage: curl -fsSL https://raw.githubusercontent.com/nikvdp/cco/master/install.sh | bash"
+	echo "Usage: curl -fsSL https://raw.githubusercontent.com/antony/cco/master/install.sh | bash"
 	echo ""
 	echo "This script will:"
 	echo "  • Clone cco to ~/.local/share/cco"

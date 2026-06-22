@@ -9,6 +9,8 @@ source "$CCO_INSTALLATION_DIR/lib/agents/opencode.sh"
 # shellcheck source=/dev/null
 source "$CCO_INSTALLATION_DIR/lib/agents/pi.sh"
 # shellcheck source=/dev/null
+source "$CCO_INSTALLATION_DIR/lib/agents/my_pi.sh"
+# shellcheck source=/dev/null
 source "$CCO_INSTALLATION_DIR/lib/agents/gemini.sh"
 
 configure_agent_subcommand() {
@@ -30,6 +32,10 @@ configure_agent_subcommand() {
 	pi)
 		command_flag="pi"
 		configure_pi_mode_paths
+		;;
+	my-pi)
+		command_flag="my-pi"
+		configure_my_pi_mode_paths
 		;;
 	gemini)
 		command_flag="gemini --yolo"
@@ -63,6 +69,9 @@ apply_agent_arg_policies() {
 		;;
 	pi)
 		apply_pi_arg_policies
+		;;
+	my-pi)
+		apply_my_pi_arg_policies
 		;;
 	gemini)
 		apply_gemini_arg_policies
