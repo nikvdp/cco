@@ -6,7 +6,7 @@
 
 **cco** (Claude Condom if you're so inclined) provides essential protection while Claude Code is up close and personal with your system. It automatically selects the best available sandboxing method - using native OS sandboxing (sandbox-exec on macOS, bubblewrap on Linux) when available, or falling back to Docker as a barrier to keep Claude contained while keeping your real system safe.
 
-**UPDATE**: `cco` can now sandbox OpenAI's `codex` as well! Just start it with `cco codex` to don your codex condom! ([Opencode](https://github.com/anomalyco/opencode), [Pi coding agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), and factory.ai's [droid](https://factory.ai/) are supported as well.)
+**UPDATE**: `cco` can now sandbox OpenAI's `codex` as well! Just start it with `cco codex` to don your codex condom! ([OpenCode](https://github.com/anomalyco/opencode), [Oh My Pi](https://github.com/can1357/oh-my-pi), [Pi coding agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent), and factory.ai's [droid](https://factory.ai/) are supported as well.)
 
 ## Why protection matters
 
@@ -384,7 +384,7 @@ Security note: `--dangerously-bypass-approvals-and-sandbox` applies to Codex’s
 
 - `cco auto claude` runs Claude with `--permission-mode auto` instead of `--dangerously-skip-permissions`.
 - `cco auto codex` runs Codex with `--ask-for-approval on-request` instead of `--dangerously-bypass-approvals-and-sandbox`; because it no longer uses the bypass flag, Codex's own sandbox may also apply.
-- For all other agents (`gemini`, `droid`, `opencode`, `pi`) it behaves exactly like running the agent normally.
+- For all other agents (`gemini`, `droid`, `opencode`, `omp`, `pi`) it behaves exactly like running the agent normally.
 
 In every case `cco`'s sandbox still applies. For Claude, auto mode only changes Claude's permission posture; for Codex, replacing the bypass flag also lets Codex enforce its own sandbox unless your Codex configuration or arguments say otherwise.
 

@@ -69,7 +69,7 @@ is_valid_persist_name() {
 
 is_known_subcommand() {
 	case "$1" in
-	shell | auto | codex | droid | opencode | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+	shell | auto | codex | droid | opencode | omp | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
 		return 0
 		;;
 	*)
@@ -3307,7 +3307,7 @@ while [[ $# -gt 0 ]]; do
 			while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
 				# Stop if we hit a known subcommand
 				case "$1" in
-				shell | auto | codex | droid | opencode | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
+				shell | auto | codex | droid | opencode | omp | pi | gemini | self-update | cleanup | info | backup-creds | restore-creds | pull | rebuild)
 					# This is a subcommand, not a directory
 					break
 					;;
@@ -3363,7 +3363,7 @@ if [[ $# -gt 0 ]]; then
 			[[ $# -gt 0 ]] && shift # drop the explicit "claude" agent name when present
 			claude_args=("$@")
 			;;
-		codex | droid | opencode | pi | gemini)
+		codex | droid | opencode | omp | pi | gemini)
 			configure_agent_subcommand "$1"
 			shift
 			claude_args=("$@")
@@ -3393,6 +3393,13 @@ if [[ $# -gt 0 ]]; then
 		configure_agent_subcommand "opencode"
 		shift
 		# All remaining arguments are passed to opencode
+		claude_args=("$@")
+		;;
+	omp)
+		# Oh My Pi mode - no permission bypass flag needed
+		configure_agent_subcommand "omp"
+		shift
+		# All remaining arguments are passed to omp
 		claude_args=("$@")
 		;;
 	pi)
@@ -3481,6 +3488,7 @@ if [[ $# -gt 0 ]]; then
 		echo "  codex [args...]     Run OpenAI Codex in sandbox"
 		echo "  droid [args...]     Run Droid CLI in sandbox"
 		echo "  opencode [args...]  Run OpenCode in sandbox"
+		echo "  omp [args...]       Run Oh My Pi in sandbox"
 		echo "  pi [args...]        Run Pi coding agent in sandbox"
 		echo "  gemini [args...]    Run Google Gemini CLI in sandbox"
 		echo "  auto <agent> [args] Run an agent in auto mode (asks when needed, not full bypass)"

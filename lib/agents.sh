@@ -7,6 +7,8 @@ source "$CCO_INSTALLATION_DIR/lib/agents/droid.sh"
 # shellcheck source=/dev/null
 source "$CCO_INSTALLATION_DIR/lib/agents/opencode.sh"
 # shellcheck source=/dev/null
+source "$CCO_INSTALLATION_DIR/lib/agents/omp.sh"
+# shellcheck source=/dev/null
 source "$CCO_INSTALLATION_DIR/lib/agents/pi.sh"
 # shellcheck source=/dev/null
 source "$CCO_INSTALLATION_DIR/lib/agents/gemini.sh"
@@ -26,6 +28,10 @@ configure_agent_subcommand() {
 	opencode)
 		command_flag="opencode"
 		configure_opencode_mode_paths
+		;;
+	omp)
+		command_flag="omp"
+		configure_omp_mode_paths
 		;;
 	pi)
 		command_flag="pi"
@@ -60,6 +66,9 @@ apply_agent_arg_policies() {
 		;;
 	opencode)
 		apply_opencode_arg_policies
+		;;
+	omp)
+		apply_omp_arg_policies
 		;;
 	pi)
 		apply_pi_arg_policies
