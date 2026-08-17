@@ -75,6 +75,7 @@ if output=$("$CCO_BIN" --help 2>&1); then
 	assert_contains "$output" "--yes, -y             Auto-accept startup recovery prompts" "--help shows --yes flag"
 	assert_contains "$output" "CLAUDE_CODE_OAUTH_TOKEN" "--help documents external Claude token"
 	assert_contains "$output" "ANTHROPIC_AUTH_TOKEN" "--help documents Anthropic auth token passthrough"
+	assert_contains "$output" "omp [args...]       Run Oh My Pi in sandbox" "--help shows omp command"
 else
 	echo "  output:"
 	printf '%s\n' "$output" | sed 's/^/    /'
@@ -207,6 +208,40 @@ if (
 	pass "non-Claude modes skip Claude authentication preflight"
 else
 	fail "non-Claude modes skip Claude authentication preflight"
+fi
+
+echo ""
+echo "Test: OMP mode registers its command and writable state roots"
+if (
+	source "$FUNCTIONS_ONLY"
+	export HOME="$TEST_ROOT/omp-home"
+	export PI_CODING_AGENT_DIR="$TEST_ROOT/omp-agent"
+	export XDG_DATA_HOME="$TEST_ROOT/xdg-data"
+	export XDG_STATE_HOME="$TEST_ROOT/xdg-state"
+	export XDG_CACHE_HOME="$TEST_ROOT/xdg-cache"
+	mkdir -p \
+		"$HOME/.omp" \
+		"$PI_CODING_AGENT_DIR" \
+		"$XDG_DATA_HOME/omp" \
+		"$XDG_STATE_HOME/omp" \
+		"$XDG_CACHE_HOME/omp"
+	rw_paths=()
+	add_rw_path() {
+		rw_paths+=("$1")
+	}
+	is_known_subcommand "omp"
+	configure_agent_subcommand "omp"
+	[[ "$command_flag" == "omp" ]]
+	[[ ${#rw_paths[@]} -eq 5 ]]
+	[[ "${rw_paths[0]}" == "$HOME/.omp" ]]
+	[[ "${rw_paths[1]}" == "$PI_CODING_AGENT_DIR" ]]
+	[[ "${rw_paths[2]}" == "$XDG_DATA_HOME/omp" ]]
+	[[ "${rw_paths[3]}" == "$XDG_STATE_HOME/omp" ]]
+	[[ "${rw_paths[4]}" == "$XDG_CACHE_HOME/omp" ]]
+); then
+	pass "OMP mode registers its command and writable state roots"
+else
+	fail "OMP mode registers its command and writable state roots"
 fi
 
 echo ""
