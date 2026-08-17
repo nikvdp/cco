@@ -125,7 +125,8 @@ RUN npm install -g \
     opencode-ai@latest \
     @factory/cli@latest \
     @google/gemini-cli@latest \
-    @mariozechner/pi-coding-agent@latest
+    @mariozechner/pi-coding-agent@latest \
+    @oh-my-pi/pi-coding-agent@latest
 
 # Don't set a default user - let the entrypoint handle user creation and setup
 # The entrypoint will create the appropriate user and set HOME correctly
