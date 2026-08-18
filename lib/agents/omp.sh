@@ -7,6 +7,7 @@ configure_omp_mode_paths() {
 		"${XDG_DATA_HOME:-$HOME/.local/share}/omp"
 		"${XDG_STATE_HOME:-$HOME/.local/state}/omp"
 		"${XDG_CACHE_HOME:-$HOME/.cache}/omp"
+		"$HOME/.bun"
 	)
 
 	local p

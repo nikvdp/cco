@@ -224,7 +224,8 @@ if (
 		"$PI_CODING_AGENT_DIR" \
 		"$XDG_DATA_HOME/omp" \
 		"$XDG_STATE_HOME/omp" \
-		"$XDG_CACHE_HOME/omp"
+		"$XDG_CACHE_HOME/omp" \
+		"$HOME/.bun"
 	rw_paths=()
 	add_rw_path() {
 		rw_paths+=("$1")
@@ -232,12 +233,13 @@ if (
 	is_known_subcommand "omp"
 	configure_agent_subcommand "omp"
 	[[ "$command_flag" == "omp" ]]
-	[[ ${#rw_paths[@]} -eq 5 ]]
+	[[ ${#rw_paths[@]} -eq 6 ]]
 	[[ "${rw_paths[0]}" == "$HOME/.omp" ]]
 	[[ "${rw_paths[1]}" == "$PI_CODING_AGENT_DIR" ]]
 	[[ "${rw_paths[2]}" == "$XDG_DATA_HOME/omp" ]]
 	[[ "${rw_paths[3]}" == "$XDG_STATE_HOME/omp" ]]
 	[[ "${rw_paths[4]}" == "$XDG_CACHE_HOME/omp" ]]
+	[[ "${rw_paths[5]}" == "$HOME/.bun" ]]
 ); then
 	pass "OMP mode registers its command and writable state roots"
 else
