@@ -510,6 +510,21 @@ if [[ "$OS" == "Linux" ]]; then
 	else
 		fail "bwrap is available"
 	fi
+
+	# On ostree systems (Silverblue, Bluefin) these are symlinks, and /opt is an
+	# absolute one. Binding an absolute symlink destination onto itself makes
+	# bwrap fail to start at all. See issue #68.
+	echo "Test: top-level mount points are readable inside sandbox"
+	missing=""
+	for p in /home /var /root /run /opt /srv /media /mnt /usr /etc /sys; do
+		[[ -e "$p" ]] || continue
+		./sandbox test -e "$p" 2>/dev/null || missing="$missing $p"
+	done
+	if [[ -z "$missing" ]]; then
+		pass "top-level mount points are readable inside sandbox"
+	else
+		fail "top-level mount points are readable inside sandbox: unreachable$missing"
+	fi
 elif [[ "$OS" == "Darwin" ]]; then
 	echo "Test: sandbox-exec is available"
 	if command -v sandbox-exec >/dev/null 2>&1; then
