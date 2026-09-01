@@ -202,8 +202,19 @@ run_linux() {
 	fi
 
 	# 2) Common top-level mount points RO so writable mounts can’t leak through.
+	# Bind the symlink-resolved path: on ostree systems (Fedora Silverblue,
+	# Bluefin) several of these are symlinks, and bwrap resolves an absolute
+	# symlink destination against its staging root — where the target does not
+	# exist — so `--ro-bind /opt /opt` fails on /opt -> /var/opt. The symlinks
+	# themselves still come through via the `--ro-bind / /` above.
+	local rp
 	for p in /home /var /root /run /opt /srv /media /mnt /usr /etc /sys; do
-		[[ -e "$p" ]] && args+=(--ro-bind "$p" "$p")
+		[[ -e "$p" ]] || continue
+		rp="$p"
+		# Resolve without cd'ing in: some of these (e.g. /root) are not
+		# traversable by an unprivileged user.
+		[[ -L "$p" ]] && rp="$(readlink -f -- "$p" 2>/dev/null || echo "$p")"
+		args+=(--ro-bind "$rp" "$rp")
 	done
 
 	# 3) If safe mode enabled, hide the rest of $HOME by default.
