@@ -407,30 +407,36 @@ If you're using MCP servers with localhost addresses and they're not accessible,
 
 ### Stdio-based MCP Servers
 
-**Important**: Stdio-based MCP servers need to be installed inside the container. `cco` cannot access stdio-based MCP servers that you have installed on your Mac/host system.
+Stdio MCP servers run as child processes of Claude Code, so they inherit the selected sandbox's filesystem access.
 
-This is because stdio MCP servers run as separate processes that Claude Code launches directly, and the container can only see programs installed within it.
+**Native sandbox:** Host-installed MCP binaries are available, but the host filesystem is read-only outside the project and CCO's built-in state paths. If a server writes a cache or database elsewhere, explicitly share only that directory read/write with `--add-dir`:
 
-**If installable via apt:**
 ```bash
-cco --packages your-mcp-server-package "help me code"
+mkdir -p ~/.cache/codebase-memory-mcp
+cco --add-dir ~/.cache/codebase-memory-mcp "help me code"
 ```
 
-**For custom installation, modify the Dockerfile:**
+With native `--safe`, also expose a host-installed binary's directory read-only if it is under the otherwise hidden home directory:
+
 ```bash
-# Clone or fork the cco repository
-git clone https://github.com/nikvdp/cco.git
-cd cco
-
-# Edit the Dockerfile to add your MCP server installations
-# Add lines like these before the final ENTRYPOINT/CMD:
-# RUN apt-get update && apt-get install -y your-mcp-server
-# RUN pip install your-python-mcp-server  
-# RUN npm install -g your-nodejs-mcp-server
-
-# Build your custom image
-./cco --rebuild "help me with MCP server functionality"
+cco --safe \
+  --allow-readonly ~/.local/bin \
+  --add-dir ~/.cache/codebase-memory-mcp \
+  "help me code"
 ```
+
+Prefer the narrow cache directory over making all of `~/.cache` writable.
+
+**Docker sandbox:** The MCP server must be installed inside the Linux container. A macOS host binary cannot run inside a Linux container, even if its path is mounted. For a one-time installation that persists across sessions, use a named persistent container:
+
+```bash
+cco --backend docker --persist=stdio-mcp shell
+# Install the Linux MCP server inside the shell, then exit.
+
+cco --backend docker --persist=stdio-mcp "help me code"
+```
+
+The MCP command configured in Claude must resolve inside the container; prefer a command on the container's `PATH` instead of an absolute host path. Alternatively, use `--packages` for software available through apt, or build a custom image and select it with `--image`.
 
 ## Configuration
 
@@ -591,8 +597,8 @@ If Claude stops responding with API errors during an active `cco` session, your 
 
 For repeated startup failures, run plain `claude` once to confirm the account can refresh or re-login outside the sandbox, then start `cco` again.
 
-**Stdio-based MCP servers not available**
-If Claude reports that stdio-based MCP servers are not found or not working, they need to be installed inside the container. See [MCP Server Support](#mcp-server-support) section for installation instructions.
+**Stdio-based MCP server cannot start or write its cache**
+In native mode, expose the server's cache or state directory with `--add-dir`. In Docker mode, install a Linux-compatible server inside the container using `--persist`, `--packages`, or a custom `--image`. See [MCP Server Support](#mcp-server-support) for examples.
 
 ### Debug access
 ```bash
