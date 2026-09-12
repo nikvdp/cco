@@ -59,6 +59,7 @@ jobs:
 
     - name: Prepare build cache sources
       id: cache_sources
+      continue-on-error: true
       run: |
         # Get current commit SHA (short)
         CURRENT_SHA=$(git rev-parse --short HEAD)
@@ -109,35 +110,58 @@ jobs:
         CACHE_SOURCES+=("type=gha")
         echo "✓ Added GitHub Actions cache as fallback"
         
-        # Convert array to comma-separated string
-        IFS=','
-        CACHE_FROM="${CACHE_SOURCES[*]}"
-        
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "Final cache sources: ${CACHE_FROM}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "cache_from=${CACHE_FROM}" >> $GITHUB_OUTPUT
+        # Each cache source is a separate Buildx input, not one CSV record.
+        printf '%s\n' "${CACHE_SOURCES[@]}"
+        {
+          echo 'cache_from<<EOF'
+          printf '%s\n' "${CACHE_SOURCES[@]}"
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"
 
     - name: Build and push Docker image
       id: build
       uses: docker/build-push-action@v5
+      continue-on-error: true
       with:
         context: .
         platforms: ${{ matrix.platform }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: ${{ steps.cache_sources.outputs.cache_from }}
-        cache-to: type=gha,mode=max
+        cache-to: type=gha,mode=max,ignore-error=true
         outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
         build-args: |
           HOST_UID=1000
           HOST_GID=1000
           CACHE_BUST=${{ github.run_number }}
 
+    - name: Rebuild without cache after cached build failure
+      id: build_clean
+      if: ${{ !cancelled() && steps.build.outcome == 'failure' }}
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: ${{ matrix.platform }}
+        labels: ${{ steps.meta.outputs.labels }}
+        no-cache: true
+        outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+        build-args: |
+          HOST_UID=1000
+          HOST_GID=1000
+          CACHE_BUST=${{ github.run_number }}
+
+    - name: Select successful build digest
+      id: image
+      env:
+        DIGEST: ${{ steps.build.outcome == 'success' && steps.build.outputs.digest || steps.build_clean.outputs.digest }}
+      run: |
+        [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+        echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
     - name: Export digest
       if: github.event_name != 'pull_request'
       run: |
         mkdir -p /tmp/digests
-        digest="${{ steps.build.outputs.digest }}"
+        digest="${{ steps.image.outputs.digest }}"
         touch "/tmp/digests/${digest#sha256:}"
 
     - name: Push architecture-specific tags
@@ -150,16 +174,16 @@ jobs:
         CURRENT_SHA=$(git rev-parse --short HEAD)
         
         echo "Creating architecture-specific tags for ${ARCH_SUFFIX}"
-        echo "Digest: ${{ steps.build.outputs.digest }}"
+        echo "Digest: ${{ steps.image.outputs.digest }}"
         
         # Pull the image by digest with error handling
-        if ! docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}; then
+        if ! docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}; then
           echo "Failed to pull image by digest, skipping architecture-specific tagging"
           exit 0
         fi
         
         # Tag with architecture-specific tags
-        docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
+        docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }} \
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${CURRENT_SHA}-${ARCH_SUFFIX}
         
         # Push architecture-specific tag
@@ -169,7 +193,7 @@ jobs:
         # If on master branch, also push latest-arch tag
         if [[ "${{ github.ref }}" == "refs/heads/master" ]]; then
           echo "On master branch, also pushing latest-${ARCH_SUFFIX}"
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }} \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${ARCH_SUFFIX}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${ARCH_SUFFIX}
         fi
