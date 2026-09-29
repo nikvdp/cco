@@ -155,6 +155,37 @@ else
 	fi
 fi
 
+if [[ "$OS" == "Darwin" ]]; then
+	echo "Test: Claude JSON lock directory remains writable"
+	if HOME="$CLAUDE_HOME" ./sandbox sh -c 'mkdir "$HOME/.claude.json.lock" && : >"$HOME/.claude.json.lock/lock"' 2>/dev/null; then
+		pass "Claude JSON lock directory remains writable"
+	else
+		fail "Claude JSON lock directory remains writable"
+	fi
+
+	echo "Test: Claude JSON atomic temp file remains writable"
+	if HOME="$CLAUDE_HOME" ./sandbox sh -c ': >"$HOME/.claude.json.tmp.write"' 2>/dev/null; then
+		pass "Claude JSON atomic temp file remains writable"
+	else
+		fail "Claude JSON atomic temp file remains writable"
+	fi
+
+	echo "Test: Claude JSON lock prefix cannot create sibling files"
+	if HOME="$CLAUDE_HOME" ./sandbox sh -c ': >"$HOME/.claude.json.lockx"' 2>/dev/null; then
+		fail "Claude JSON lock prefix cannot create sibling files"
+	else
+		pass "Claude JSON lock prefix cannot create sibling files"
+	fi
+
+	mkdir "$CLAUDE_HOME/.claude.json.tmp.directory"
+	echo "Test: Claude JSON temp prefix cannot write nested paths"
+	if HOME="$CLAUDE_HOME" ./sandbox sh -c ': >"$HOME/.claude.json.tmp.directory/nested"' 2>/dev/null; then
+		fail "Claude JSON temp prefix cannot write nested paths"
+	else
+		pass "Claude JSON temp prefix cannot write nested paths"
+	fi
+fi
+
 rm -rf "$CLAUDE_HOME"
 
 #

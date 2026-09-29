@@ -642,8 +642,8 @@ run_macos() {
 		# 6. Claude lock dirs and atomic-write temp files in $HOME
 		printf '(allow file-write* (regex #"^%s/\\.claude\\.lock$"))\n' "$(policy_quote "$HOME")"
 		printf '(allow file-write* (regex #"^%s/\\.claude\\.lock/"))\n' "$(policy_quote "$HOME")"
-		printf '(allow file-write* (regex #"^%s/\\.claude\\.json\\.lock"))\n' "$(policy_quote "$HOME")"
-		printf '(allow file-write* (regex #"^%s/\\.claude\\.json\\.tmp\\."))\n' "$(policy_quote "$HOME")"
+		printf '(allow file-write* (regex #"^%s/\\.claude\\.json\\.lock(/|$)"))\n' "$(policy_quote "$HOME")"
+		printf '(allow file-write* (regex #"^%s/\\.claude\\.json\\.tmp\\.[^/]+$"))\n' "$(policy_quote "$HOME")"
 
 		# 7. Keychain access for OAuth token refresh (only if explicitly allowed)
 		if [[ "$allow_keychain" == true ]]; then
